@@ -1,40 +1,93 @@
-# electron-quick-start
+# MDP Data Process
 
-**Clone and run for a quick way to see Electron in action.**
+MDP (Marketing Data Process) is a desktop application built with Electron, Vue 3, and Quasar. It is designed to process sales data from various distributors, map outlet information, and manage marketing team structures for QL Sales.
 
-This is a minimal Electron application based on the [Quick Start Guide](https://electronjs.org/docs/latest/tutorial/quick-start) within the Electron documentation.
+## Features
 
-A basic Electron application needs just these files:
+- **Sales Data Processing**: Import and process sales data from CSV, XLSX, and DBF formats.
+- **Multi-Distributor Support**: Handles data from APL, TSJ, PPG, and others.
+- **Outlet Mapping**: Intelligent tool to map unmapped external outlets to internal master records using SQL, Fuzzy Search, or Meilisearch.
+- **Marketing Structure**: Manage monthly marketing team hierarchy/roster (Pejabat, Jabatan, Checkers).
+- **FTP Integration**: Download sales data directly from FTP servers.
+- **Reports**: Generate comprehensive sales reports.
 
-- `package.json` - Points to the app's main file and lists its details and dependencies.
-- `main.js` - Starts the app and creates a browser window to render HTML. This is the app's **main process**.
-- `index.html` - A web page to render. This is the app's **renderer process**.
-- `preload.js` - A content script that runs before the renderer process loads.
+## Prerequisites
 
-You can learn more about each of these components in depth within the [Tutorial](https://electronjs.org/docs/latest/tutorial/tutorial-prerequisites).
+- **Node.js**: v16 or higher (v20+ recommended).
+- **MySQL**: Local or remote MySQL database containing the required schema (`mdp_sales`).
+- **Meilisearch**: (Optional) For high-performance search functionality in Outlet Mapping.
 
-## To Use
+## Installation
 
-To clone and run this repository you'll need [Git](https://git-scm.com) and [Node.js](https://nodejs.org/en/download/) (which comes with [npm](http://npmjs.com)) installed on your computer. From your command line:
+1.  **Clone the repository**:
+    ```bash
+    git clone https://github.com/perkasajob/MDP-Data-Process.git
+    cd "MDP Data Process"
+    ```
 
+2.  **Install dependencies**:
+    ```bash
+    npm install
+    ```
+
+3.  **Configuration**:
+    - The application uses `config.yaml` for database and FTP settings.
+    - Ensure `config.yaml` is present in the application root or the user's AppData folder after installation.
+    - **Note**: `src/shims/mysql2.js` and `src/services/DbService.js` handle database connections.
+
+## Running the Application
+
+### Development Mode
+To run the application locally with hot-reloading:
 ```bash
-# Clone this repository
-git clone https://github.com/electron/electron-quick-start
-# Go into the repository
-cd electron-quick-start
-# Install dependencies
-npm install
-# Run the app
-npm start
+npm run dev
 ```
 
-Note: If you're using Linux Bash for Windows, [see this guide](https://www.howtogeek.com/261575/how-to-run-graphical-linux-desktop-applications-from-windows-10s-bash-shell/) or use `node` from the command prompt.
+### Build for Production
+To package the application for Windows (creates an `.exe` installer):
+```bash
+npm run package
+```
+The output will be in the `release/` directory.
 
-## Resources for Learning Electron
+## User Manual
 
-- [electronjs.org/docs](https://electronjs.org/docs) - all of Electron's documentation
-- [Electron Fiddle](https://electronjs.org/fiddle) - Electron Fiddle, an app to test small Electron experiments
+### 1. Data Process Page
+This is the main dashboard for processing daily sales files.
+- **Distributor**: Select the source distributor (e.g., APL, TSJ).
+- **Date**: Select the transaction date for the data.
+- **Sales Document**: Upload the raw sales file (.csv, .xlsx, .dbf).
+- **Get FTP**: Click to download the latest sales files from the configured FTP server.
+- **Submit**: Processes the uploaded file and inserts/updates sales records in the database.
+- **Create Sales Report**: Generates a summary report of processed sales.
+- **Update Outlets**: Bulk update outlet master data using a CSV file.
+
+### 2. Outlet Map Page
+Used to link (map) outlets from distributor data to your internal Outlet Master.
+- **Unmapped Outlets**: Lists outlets from sales data that don't match any internal record.
+- **Search Method**:
+    - **SQL**: Direct database search (LIKE query).
+    - **Fuse**: In-memory fuzzy search.
+    - **Meilisearch**: High-performance indexed search (requires Meilisearch server).
+    - **Google**: Opens a Google search for the outlet name/address.
+- **Suggestions**: Shows potential matches from the master database. Click "Select" to map.
+- **Manual Mapping**: You can manually edit `ComID`, `OutID`, or assign an `MR` (Marketing Rep) directly in the table.
+- **Sync to Meilisearch**: Updates the search index with the latest master data.
+
+### 3. Marketing Structure Page
+Manage the organizational structure for each month.
+- **Filter**: Select Year and Month to view the roster.
+- **Copy Previous Month**: If a new month has no data, you can copy the entire structure from the previous month.
+- **Add Row**: Add a new official (Pejabat).
+- **Edit**: Inline editing for Name, Position (Jabatan), and Checker.
+- **Save**: Persists changes to the database.
+
+## Troubleshooting
+
+- **"Vite not recognized"**: Ensure you have run `npm install`.
+- **Database Connection**: Check your `config.yaml` or environment variables. Ensure MySQL service is running.
+- **Meilisearch Error**: If Meilisearch is selected but not running, search functionality will fallback or fail. Ensure the Meilisearch binary in `tools/` (or system service) is running.
 
 ## License
 
-[CC0 1.0 (Public Domain)](LICENSE.md)
+Copyright 2025 QL Sales. All rights reserved.
