@@ -1,0 +1,16 @@
+node_modules
+$DOCUMENTS
+Archives
+build
+data____
+dist
+dist-electron
+release
+release_old
+report
+*.txt
+*.log
+*.exe
+*.zip
+*.7z
+tools

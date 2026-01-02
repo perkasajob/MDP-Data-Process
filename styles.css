@@ -1,0 +1,4 @@
+/* styles.css */
+@import "tailwindcss";
+@plugin "daisyui";
+/* Add styles here to customize the appearance of your app */
