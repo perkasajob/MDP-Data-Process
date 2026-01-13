@@ -1,7 +1,7 @@
 node_modules
 $DOCUMENTS
 Archives
-build
+
 data____
 dist
 dist-electron
@@ -14,3 +14,4 @@ report
 *.zip
 *.7z
 tools
+config.yaml

@@ -20,8 +20,56 @@
             min="1"
             max="12"
             @change="loadData"
-        />
-         <q-btn icon="refresh" @click="loadData" round flat />
+        />        
+        <q-select
+            v-model="filterCheckerName"
+            label="Filter Checker"
+            dense filled
+            class="w-150"
+            use-input
+            hide-selected
+            fill-input
+            input-debounce="300"
+            :options="filterCheckerOptions"
+            @filter="filterCheckerFn"
+            @input-value="val => filterCheckerName = val"
+            @keyup.enter="loadData"
+            clearable
+            @clear="loadData"
+        >
+            <template v-slot:no-option>
+                <q-item>
+                    <q-item-section class="text-grey">
+                        No results
+                    </q-item-section>
+                </q-item>
+            </template>
+        </q-select>
+        <q-select
+            v-model="filterNamaPejabat"
+            label="Filter Nama"
+            dense filled
+            class="w-150"
+            use-input
+            hide-selected
+            fill-input
+            input-debounce="300"
+            :options="filterNamaOptions"
+            @filter="filterNamaFn"
+            @input-value="val => filterNamaPejabat = val"
+            @keyup.enter="loadData"
+            clearable
+            @clear="loadData"
+        >
+            <template v-slot:no-option>
+                <q-item>
+                    <q-item-section class="text-grey">
+                        No results
+                    </q-item-section>
+                </q-item>
+            </template>
+        </q-select>
+         <q-btn icon="search" @click="loadData" round flat />
       </div>
     </div>
 
@@ -40,54 +88,27 @@
             flat 
             :pagination="{ rowsPerPage: 0 }" 
             separator="cell"
-            class="sticky-header"
+            class="sticky-header compact-table"
             :row-class="getRowClass"
+            table-style="table-layout: fixed; width: 100%; border-collapse: collapse;"
         >
             <template v-slot:header="props">
                 <q-tr :props="props">
-                    <q-th v-for="col in props.cols" :key="col.name" :props="props" class="resizable-th">
-                        {{ col.label }}
+                    <q-th v-for="col in props.cols" :key="col.name" :props="props" class="resizable-th" :style="col.headerStyle">
+                        <div class="row justify-between items-center no-wrap" style="width: 100%">
+                            <span>{{ col.label }}</span>
+                            <div 
+                                class="resizer" 
+                                @mousedown.stop.prevent="startResize($event, col.name)"
+                            ></div>
+                        </div>
                     </q-th>
                 </q-tr>
             </template>
 
             <template v-slot:body="props">
                 <q-tr :props="props" :class="getRowClass(props.row)">
-                    <q-td key="pejid" :props="props">
-                        {{ props.row.pejid }}
-                    </q-td>
-                    <q-td key="nama_pejabat" :props="props">
-                        <q-input 
-                            v-model="props.row.nama_pejabat" 
-                            dense borderless 
-                            input-class="text-body2" 
-                            @update:model-value="markDirty(props.row)"
-                        />
-                    </q-td>
-                    <q-td key="kode" :props="props">
-                        <q-select 
-                            v-model="props.row.jabOption" 
-                            :options="jabatanOptions" 
-                            option-label="kode" 
-                            option-value="jabid"
-                            dense borderless
-                            options-dense
-                            @update:model-value="val => { 
-                                props.row.jabid = val ? val.jabid : null; 
-                                props.row.kode = val ? val.kode : '';
-                                markDirty(props.row);
-                            }"
-                        />
-                    </q-td>
-                    <q-td key="comid" :props="props">
-                         <q-input 
-                            v-model="props.row.comid" 
-                            dense borderless 
-                            input-class="text-body2" 
-                            @update:model-value="markDirty(props.row)"
-                        />
-                    </q-td>
-                    <q-td key="checker_name" :props="props" style="min-width: 250px;">
+                    <q-td key="checker_name" :props="props" :style="getColStyle('checker_name')">
                         <q-select
                             v-model="props.row.checkerOption"
                             use-input
@@ -113,6 +134,48 @@
                             </template>
                         </q-select>
                     </q-td>
+                    <q-td key="pejid" :props="props" :style="getColStyle('pejid')">
+                        {{ props.row.pejid }}
+                    </q-td>
+                    <q-td key="nama_pejabat" :props="props" :style="getColStyle('nama_pejabat')">
+                        <q-input 
+                            v-model="props.row.nama_pejabat" 
+                            dense borderless 
+                            input-class="text-body2" 
+                            @update:model-value="markDirty(props.row)"
+                        />
+                    </q-td>
+                    <q-td key="kode" :props="props" :style="getColStyle('kode')">
+                        <q-select 
+                            v-model="props.row.jabOption" 
+                            :options="jabatanOptions" 
+                            option-label="kode" 
+                            option-value="jabid"
+                            dense borderless
+                            options-dense
+                            @update:model-value="val => { 
+                                props.row.jabid = val ? val.jabid : null; 
+                                props.row.kode = val ? val.kode : '';
+                                markDirty(props.row);
+                            }"
+                        />
+                    </q-td>
+                    <q-td key="comid" :props="props" :style="getColStyle('comid')">
+                         <q-input 
+                            v-model="props.row.comid" 
+                            dense borderless 
+                            input-class="text-body2" 
+                            @update:model-value="markDirty(props.row)"
+                        />
+                    </q-td>
+                    <q-td key="actions" :props="props" :style="getColStyle('actions')">
+                        <q-btn 
+                            icon="delete" 
+                            color="negative" 
+                            flat round dense 
+                            @click="confirmDelete(props.row)"
+                        />
+                    </q-td>
                 </q-tr>
             </template>
         </q-table>
@@ -130,13 +193,16 @@ import {
     getNewPejId, 
     saveMarketingRow,
     searchPejabat,
-    copyPreviousMonthData
+    copyPreviousMonthData,
+    deleteMarketingStructure
 } from '../services/MarketingService'
 
 const $q = useQuasar()
 
 const filterYear = ref(parseInt(dayjs().format('YYYY')))
 const filterMonth = ref(parseInt(dayjs().format('MM')))
+const filterNamaPejabat = ref('')
+const filterCheckerName = ref('')
 
 const rows = ref([])
 const loading = ref(false)
@@ -144,14 +210,62 @@ const saving = ref(false)
 
 const jabatanOptions = ref([])
 const checkerOptions = ref([])
+const filterNamaOptions = ref([])
+const filterCheckerOptions = ref([])
 
-const columns = [
-  { name: 'pejid', label: 'Pej ID', field: 'pejid', align: 'left', sortable: true, style: 'width: 30px', headerStyle: 'width: 30px' },
-  { name: 'nama_pejabat', label: 'Nama Pejabat', field: 'nama_pejabat', align: 'left', sortable: true, style: 'min-width: 250px', headerStyle: 'min-width: 250px' },
-  { name: 'kode', label: 'Jabatan', field: 'kode', align: 'left', sortable: true, style: 'width: 30px', headerStyle: 'width: 30px' },
-  { name: 'comid', label: 'Com ID', field: 'comid', align: 'left', sortable: true, style: 'width: 20px', headerStyle: 'width: 20px' },
-  { name: 'checker_name', label: 'Checker', field: 'checker_name', align: 'left', sortable: true, style: 'min-width: 250px', headerStyle: 'min-width: 250px' },
-]
+const columns = ref([
+    { name: 'checker_name', label: 'Checker', field: 'checker_name', align: 'left', sortable: true, style: 'width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;', headerStyle: 'width: 300px' },
+    { name: 'pejid', label: 'Pej ID', field: 'pejid', align: 'left', sortable: true, style: 'width: 60px', headerStyle: 'width: 60px' },
+    { name: 'nama_pejabat', label: 'Nama Pejabat', field: 'nama_pejabat', align: 'left', sortable: true, style: 'width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;', headerStyle: 'width: 300px' },
+    { name: 'kode', label: 'Jabatan', field: 'kode', align: 'left', sortable: true, style: 'width: 80px', headerStyle: 'width: 80px' },
+    { name: 'comid', label: 'ComID', field: 'comid', align: 'left', sortable: true, style: 'width: 40px', headerStyle: 'width: 40px' },
+    { name: 'actions', label: 'Actions', field: 'actions', align: 'center', style: 'width: 40px', headerStyle: 'width: 40px' }
+])
+
+function getColStyle(name) {
+    const col = columns.value.find(c => c.name === name)
+    return col ? col.style : ''
+}
+
+// Resizing Logic
+const draggingColumn = ref(null)
+const startX = ref(0)
+const startWidth = ref(0)
+
+function startResize(e, colName) {
+    const col = columns.value.find(c => c.name === colName)
+    if (!col) return
+    
+    draggingColumn.value = col
+    startX.value = e.pageX
+    // Simple parse of width
+    const match = col.style ? col.style.match(/width:\s*(\d+)px/) : null
+    startWidth.value = match ? parseInt(match[1]) : 100
+    
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+}
+
+function onMouseMove(e) {
+    if (!draggingColumn.value) return
+    const diff = e.pageX - startX.value
+    const newWidth = Math.max(50, startWidth.value + diff)
+    
+    // Update style and headerStyle
+    const styleStr = `width: ${newWidth}px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`
+    draggingColumn.value.style = styleStr
+    draggingColumn.value.headerStyle = `width: ${newWidth}px`
+}
+
+function onMouseUp() {
+    draggingColumn.value = null
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+}
 
 function getRowClass(row) {
     if (row.isDirty) return 'bg-yellow-1'
@@ -169,7 +283,10 @@ async function loadData() {
             jabatanOptions.value = await getJabatanOptions()
         }
 
-        let data = await getMarketingStructure(filterYear.value, filterMonth.value)
+        let data = await getMarketingStructure(filterYear.value, filterMonth.value, {
+            nama_pejabat: filterNamaPejabat.value,
+            checker_name: filterCheckerName.value
+        })
 
         // Check for empty data in current/future month
         const targetDate = dayjs(`${filterYear.value}-${filterMonth.value}-01`)
@@ -286,6 +403,37 @@ async function saveAll() {
     }
 }
 
+function confirmDelete(row) {
+    if (row.isNew) {
+        rows.value = rows.value.filter(r => r !== row)
+        return
+    }
+
+    $q.dialog({
+        title: 'Confirm Delete',
+        message: `Are you sure you want to delete ${row.nama_pejabat}?`,
+        cancel: true,
+        persistent: true
+    }).onOk(async () => {
+        try {
+            loading.value = true
+            await deleteMarketingStructure(row.pejid, filterYear.value, filterMonth.value)
+            
+            // 1. Immediate local update for better UX (using != for type safety)
+            rows.value = rows.value.filter(r => r.pejid != row.pejid)
+            
+            $q.notify({ type: 'positive', message: 'Row deleted' })
+            
+            // 2. Full refresh from server to ensure state is perfectly synced
+            await loadData()
+        } catch (e) {
+            $q.notify({ type: 'negative', message: 'Delete failed: ' + e.message })
+        } finally {
+            loading.value = false
+        }
+    })
+}
+
 async function filterCheckers (val, update) {
     if (val === '') {
         update(() => {
@@ -301,6 +449,30 @@ async function filterCheckers (val, update) {
     })
 }
 
+async function filterNamaFn(val, update) {
+    if (val === '') {
+        update(() => { filterNamaOptions.value = [] })
+        return
+    }
+    const results = await searchPejabat(val, filterYear.value, filterMonth.value)
+    update(() => {
+        const names = results.map(r => r.nama_pejabat)
+        filterNamaOptions.value = [...new Set(names)]
+    })
+}
+
+async function filterCheckerFn(val, update) {
+    if (val === '') {
+        update(() => { filterCheckerOptions.value = [] })
+        return
+    }
+    const results = await searchPejabat(val, filterYear.value, filterMonth.value)
+    update(() => {
+        const names = results.map(r => r.nama_pejabat)
+        filterCheckerOptions.value = [...new Set(names)]
+    })
+}
+
 onMounted(() => {
     loadData()
 })
@@ -309,6 +481,9 @@ onMounted(() => {
 <style scoped>
 .w-100 {
     width: 100px;
+}
+.w-150 {
+    width: 150px;
 }
 .table-container {
     overflow-x: auto; /* Make table width adjustable/scrollable */
@@ -328,5 +503,50 @@ onMounted(() => {
   top: 0;
   opacity: 1;
   z-index: 1;
+}
+.resizer {
+    width: 6px;
+    height: 100%;
+    position: absolute;
+    right: 0;
+    top: 0;
+    cursor: col-resize;
+    z-index: 100;
+}
+.resizer:hover{
+    background-color: #2196f3;
+}
+.sticky-header :deep(.q-table) {
+    table-layout: fixed;
+}
+.sticky-header :deep(td),
+.sticky-header :deep(th) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Compact Table Styles */
+.compact-table :deep(th),
+.compact-table :deep(td) {
+    font-size: 12px !important;
+    padding: 2px 4px !important;
+    height: 28px !important;
+}
+
+.compact-table :deep(.q-field--dense .q-field__control),
+.compact-table :deep(.q-field--dense .q-field__marginal) {
+    height: 24px !important;
+    min-height: 24px !important;
+}
+
+.compact-table :deep(.q-field__native),
+.compact-table :deep(.q-field__input) {
+    font-size: 12px !important;
+}
+
+.compact-table :deep(.q-btn--flat.q-btn--dense) {
+    padding: 2px !important;
+    min-height: unset !important;
 }
 </style>

@@ -1,10 +1,10 @@
 import { getDbConnection } from './DbService';
 import logger from './LoggerService';
 
-export async function getMarketingStructure(year, month) {
+export async function getMarketingStructure(year, month, filters = {}) {
     const pool = getDbConnection();
     // pj.pejid, pj.nama_pejabat, j.kode, pj.comid, cm.checker, checker_name (nama_pejabat)
-    const sql = `
+    let sql = `
         SELECT 
             pj.pejid,
             pj.nama_pejabat,
@@ -19,8 +19,8 @@ export async function getMarketingStructure(year, month) {
                 p.tahun,
                 p.bulan,
                 MAX(cm.cheker) as checker_id
-            FROM pejabat_divisi_lama p
-            LEFT JOIN old_maker_cheker cm 
+            FROM pj_tst_pejabat_divisi_lama p
+            LEFT JOIN pj_tst_old_maker_cheker cm 
                 ON p.pejid = cm.maker 
                 AND p.tahun = cm.thn 
                 AND p.bulan = cm.bln
@@ -29,20 +29,63 @@ export async function getMarketingStructure(year, month) {
             AND p.is_active = 1
             GROUP BY p.pejid, p.tahun, p.bulan
         ) driver
-        JOIN pejabat_divisi_lama pj 
+        JOIN pj_tst_pejabat_divisi_lama pj 
             ON driver.pejid = pj.pejid 
             AND driver.tahun = pj.tahun 
             AND driver.bulan = pj.bulan
         LEFT JOIN jabatan j 
             ON pj.jabid = j.jabid
-        LEFT JOIN pejabat_divisi_lama pj_checker 
-            ON driver.checker_id = pj_checker.pejid AND driver.tahun = pj_checker.tahun AND driver.bulan = pj_checker.bulan    
-        ORDER BY 
-            pj.comid ASC, 
-            pj.nama_pejabat ASC
+        LEFT JOIN pj_tst_pejabat_divisi_lama pj_checker 
+            ON driver.checker_id = pj_checker.pejid AND driver.tahun = pj_checker.tahun AND driver.bulan = pj_checker.bulan
+        WHERE 1=1
     `;
-    const [rows] = await pool.query(sql, [year, month]);
+
+    const params = [year, month];
+
+    if (filters.nama_pejabat) {
+        sql += ` AND pj.nama_pejabat LIKE ?`;
+        params.push(`%${filters.nama_pejabat}%`);
+    }
+
+    if (filters.checker_name) {
+        sql += ` AND pj_checker.nama_pejabat LIKE ?`;
+        params.push(`%${filters.checker_name}%`);
+    }
+
+    sql += ` ORDER BY pj.comid ASC, pj.nama_pejabat ASC`;
+
+    const [rows] = await pool.query(sql, params);
     return rows;
+}
+
+export async function deleteMarketingStructure(pejid, year, month) {
+    const pool = getDbConnection();
+    const connection = await pool.getConnection();
+    try {
+        await connection.beginTransaction();
+
+        // Delete from pj_tst_old_maker_cheker
+        await connection.query(
+            'DELETE FROM pj_tst_old_maker_cheker WHERE maker = ? AND thn = ? AND bln = ?',
+            [pejid, year, month]
+        );
+
+        // Delete from pj_tst_pejabat_divisi_lama
+        await connection.query(
+            'DELETE FROM pj_tst_pejabat_divisi_lama WHERE pejid = ? AND tahun = ? AND bulan = ?',
+            [pejid, year, month]
+        );
+
+        await connection.commit();
+        logger.info('DELETE marketing structure row', { pejid, year, month });
+        return true;
+    } catch (error) {
+        await connection.rollback();
+        logger.error('Error deleting marketing structure row', error);
+        throw error;
+    } finally {
+        connection.release();
+    }
 }
 
 export async function getJabatanOptions() {
@@ -59,14 +102,14 @@ export async function searchPejabat(query, year, month) {
     const pool = getDbConnection();
     if (!query) return [];
     // Simple search
-    const sql = `SELECT pejid, nama_pejabat FROM pejabat_divisi_lama p WHERE nama_pejabat LIKE ? and p.tahun = ? AND p.bulan = ? LIMIT 20`;
+    const sql = `SELECT pejid, nama_pejabat FROM pj_tst_pejabat_divisi_lama p WHERE nama_pejabat LIKE ? and p.tahun = ? AND p.bulan = ? LIMIT 20`;
     const [rows] = await pool.query(sql, [`%${query}%`, year, month]);
     return rows;
 }
 
 export async function getNewPejId() {
     const pool = getDbConnection();
-    const [rows] = await pool.query('SELECT MAX(pejid) as maxid FROM pejabat_divisi_lama');
+    const [rows] = await pool.query('SELECT MAX(pejid) as maxid FROM pj_tst_pejabat_divisi_lama');
     const max = rows[0].maxid || 0;
     return max + 1;
 }
@@ -81,7 +124,7 @@ export async function saveMarketingRow(row, year, month) {
         if (jabs.length > 0) jabid = jabs[0].jabid;
     }
 
-    // Check if record exists in pejabat_divisi_lama FOR THIS YEAR/MONTH (snapshot)
+    // Check if record exists in pj_tst_pejabat_divisi_lama FOR THIS YEAR/MONTH (snapshot)
     // and assuming if we are editing a "current view", we are editing that specific snapshot.
     // However, usually officials have IDs that persist. 
     // If the record exists for that month/year, we update. If not, maybe we insert?
@@ -90,7 +133,7 @@ export async function saveMarketingRow(row, year, month) {
 
     // Let's check existence by pejid AND year AND month
     const [existing] = await pool.query(
-        'SELECT * FROM pejabat_divisi_lama WHERE pejid = ? AND tahun = ? AND bulan = ?',
+        'SELECT * FROM pj_tst_pejabat_divisi_lama WHERE pejid = ? AND tahun = ? AND bulan = ?',
         [row.pejid, year, month]
     );
 
@@ -100,37 +143,37 @@ export async function saveMarketingRow(row, year, month) {
         const oldData = existing[0];
         // Update
         await pool.query(
-            'UPDATE pejabat_divisi_lama SET nama_pejabat=?, comid=?, jabid=? WHERE pejid=? AND tahun=? AND bulan=?',
+            'UPDATE pj_tst_pejabat_divisi_lama SET nama_pejabat=?, comid=?, jabid=? WHERE pejid=? AND tahun=? AND bulan=?',
             [row.nama_pejabat, row.comid, jabid, row.pejid, year, month]
         );
         // Log update
-        logger.info('UPDATE pejabat_divisi_lama', { refId: row.pejid, action: 'UPDATE', old: oldData, new: dataToSave });
+        logger.info('UPDATE pj_tst_pejabat_divisi_lama', { refId: row.pejid, action: 'UPDATE', old: oldData, new: dataToSave });
     } else {
         // Insert
         await pool.query(
-            'INSERT INTO pejabat_divisi_lama (pejid, nama_pejabat, comid, jabid, tahun, bulan, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)',
+            'INSERT INTO pj_tst_pejabat_divisi_lama (pejid, nama_pejabat, comid, jabid, tahun, bulan, is_active) VALUES (?, ?, ?, ?, ?, ?, 1)',
             [row.pejid, row.nama_pejabat, row.comid, jabid, year, month]
         );
         // Log insert
-        logger.info('INSERT pejabat_divisi_lama', { refId: row.pejid, action: 'INSERT', new: dataToSave });
+        logger.info('INSERT pj_tst_pejabat_divisi_lama', { refId: row.pejid, action: 'INSERT', new: dataToSave });
     }
 
-    // Handle old_maker_cheker (Checker)
+    // Handle pj_tst_old_maker_cheker (Checker)
     // maker = pejid
     if (row.checker) {
         const [cmList] = await pool.query(
-            'SELECT * FROM old_maker_cheker WHERE maker=? AND thn=? AND bln=?',
+            'SELECT * FROM pj_tst_old_maker_cheker WHERE maker=? AND thn=? AND bln=?',
             [row.pejid, year, month]
         );
 
         if (cmList.length > 0) {
             await pool.query(
-                'UPDATE old_maker_cheker SET cheker=? WHERE maker=? AND thn=? AND bln=?',
+                'UPDATE pj_tst_old_maker_cheker SET cheker=? WHERE maker=? AND thn=? AND bln=?',
                 [row.checker, row.pejid, year, month]
             );
         } else {
             await pool.query(
-                'INSERT INTO old_maker_cheker (maker, thn, bln, cheker) VALUES (?, ?, ?, ?)',
+                'INSERT INTO pj_tst_old_maker_cheker (maker, thn, bln, cheker) VALUES (?, ?, ?, ?)',
                 [row.pejid, year, month, row.checker]
             );
         }
@@ -151,24 +194,33 @@ export async function copyPreviousMonthData(targetYear, targetMonth) {
         prevYear = targetYear - 1;
     }
 
-    // Copy pejabat_divisi_lama
+    // Copy pj_tst_pejabat_divisi_lama
     await pool.query(`
-        INSERT INTO pejabat_divisi_lama (pejid, nama_pejabat, comid, jabid, tahun, bulan, is_active)
+        INSERT INTO pj_tst_pejabat_divisi_lama (pejid, nama_pejabat, comid, jabid, tahun, bulan, is_active)
         SELECT pejid, nama_pejabat, comid, jabid, ? as tahun, ? as bulan, 1
-        FROM pejabat_divisi_lama
+        FROM pj_tst_pejabat_divisi_lama
         WHERE tahun = ? AND bulan = ? AND is_active = 1
     `, [targetYear, targetMonth, prevYear, prevMonth]);
 
-    // Copy old_maker_cheker
+    // Update prevname
+    await pool.query(`        
+        UPDATE pj_tst_pejabat_divisi_lama
+        SET prevname = nama_pejabat
+        WHERE tahun = ? AND bulan = ? AND is_active = 1;
+    `, [targetYear, targetMonth]);
+
+    // Copy pj_tst_old_maker_cheker
     await pool.query(`
-        INSERT INTO old_maker_cheker (maker, thn, bln, cheker)
+        INSERT INTO pj_tst_old_maker_cheker (maker, thn, bln, cheker)
         SELECT maker, ? as thn, ? as bln, cheker
-        FROM old_maker_cheker
-        WHERE thn = ? AND bln = ?
+        FROM pj_tst_old_maker_cheker mk
+        LEFT JOIN pj_tst_pejabat_divisi_lama pj_checker 
+            ON mk.maker = pj_checker.pejid AND  mk.thn = pj_checker.tahun AND mk.bln = pj_checker.bulan
+        WHERE mk.thn = ? AND mk.bln = ? AND pj_checker.is_active = 1
     `, [targetYear, targetMonth, prevYear, prevMonth]);
 
     // Optionally log this mass action?
-    logger.info('COPY_MONTH pejabat_divisi_lama', { action: 'COPY_MONTH', from: `${prevYear}-${prevMonth}`, to: `${targetYear}-${targetMonth}` });
+    logger.info('COPY_MONTH pj_tst_pejabat_divisi_lama', { action: 'COPY_MONTH', from: `${prevYear}-${prevMonth}`, to: `${targetYear}-${targetMonth}` });
 
     return true;
 }
