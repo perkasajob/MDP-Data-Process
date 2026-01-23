@@ -42,6 +42,12 @@
           </q-item-section>
           <q-item-section>Outlet Editor</q-item-section>
         </q-item>
+        <q-item clickable v-ripple @click="activeTab = 'sales-target'" :active="activeTab === 'sales-target'">
+          <q-item-section avatar>
+            <q-icon name="track_changes" />
+          </q-item-section>
+          <q-item-section>Sales Target</q-item-section>
+        </q-item>
       </q-list>
     </q-drawer>
 
@@ -66,6 +72,7 @@ const OutletMapPage = defineAsyncComponent(() => import('./pages/OutletMapPage.v
 const PanelPage = defineAsyncComponent(() => import('./pages/PanelPage.vue'))
 const MarketingStructurePage = defineAsyncComponent(() => import('./pages/MarketingStructurePage.vue'))
 const OutletEditorPage = defineAsyncComponent(() => import('./pages/OutletEditorPage.vue'))
+const SalesTargetPage = defineAsyncComponent(() => import('./pages/SalesTargetPage.vue'))
 
 const activeComponent = computed(() => {
   if (activeTab.value === 'data-process') return DataProcessPage
@@ -73,6 +80,7 @@ const activeComponent = computed(() => {
   if (activeTab.value === 'panel') return PanelPage
   if (activeTab.value === 'marketing-structure') return MarketingStructurePage
   if (activeTab.value === 'outlet-panel') return OutletEditorPage
+  if (activeTab.value === 'sales-target') return SalesTargetPage
   return null
 })
 </script>

@@ -1,5 +1,74 @@
 import { getDbConnection } from './DbService';
-import logger from './LoggerService';
+const fs = window.require('fs');
+const path = window.require('path');
+import { HOME_DIR } from '../const';
+import dayjs from 'dayjs';
+
+export async function exportMarketingStructure(year, month) {
+    const pool = getDbConnection();
+
+    const rows = await pool.query(
+        'SELECT * FROM sales.mkt_structure WHERE GSM IS NOT NULL AND tahun = ? AND bulan = ?',
+        [year, month]
+    );
+    const data = rows[0]; // execute returns [rows, fields]
+
+    if (data.length === 0) {
+        throw new Error('No data found for export.');
+    }
+
+    // Determine dynamic headers
+    const currentMonthDate = dayjs(`${year}-${month}-01`);
+    const m1 = currentMonthDate.format('M-YYYY');
+    const m2 = currentMonthDate.add(1, 'month').format('M-YYYY');
+    const m3 = currentMonthDate.add(2, 'month').format('M-YYYY');
+
+    // Filter out unneeded columns if necessary, or map specific ones.
+    // The request implies renaming specific columns:
+    // sales_target -> Sales Target (M-YYYY)
+    // sales_target1 -> Sales Target (M+1-YYYY)
+    // sales_target2 -> Sales Target (M+2-YYYY)
+    // Keep other columns as is? Or mapped?
+    // Usually "export" implies dumping the table.
+
+    // Get columns from first row, excluding 'tahun' and 'bulan'
+    const keys = Object.keys(data[0]).filter(k => k !== 'tahun' && k !== 'bulan');
+
+    // Create header mapping
+    const headerMap = {
+        'sales_target': `Sales Target (${m1})`,
+        'sales_target1': `Sales Target (${m2})`,
+        'sales_target2': `Sales Target (${m3})`
+    };
+
+    const headerRow = keys.map(k => headerMap[k] || k).map(val => `"${String(val).replace(/"/g, '""')}"`).join(',');
+
+    const csvRows = data.map(row => {
+        return keys.map(k => {
+            let val = row[k];
+            if (val === null || val === undefined) val = '';
+            // Format dates if any? 
+            return `"${String(val).replace(/"/g, '""')}"`;
+        }).join(',');
+    });
+
+    const csvContent = [headerRow, ...csvRows].join('\n');
+
+    const fileName = `marketing structure ${month}-${year}.csv`;
+    // Ensure report directory exists
+    const reportDir = path.join(HOME_DIR, 'report');
+    if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true });
+
+    const filePath = path.join(reportDir, fileName);
+    fs.writeFileSync(filePath, csvContent);
+
+    // Open file
+    const { shell } = window.require('electron');
+    shell.openPath(filePath);
+
+    return filePath;
+}
+
 
 export async function getMarketingStructure(year, month, filters = {}) {
     const pool = getDbConnection();
@@ -12,7 +81,8 @@ export async function getMarketingStructure(year, month, filters = {}) {
             pj.comid,
             j.jabid,
             driver.checker_id as checker,
-            pj_checker.nama_pejabat AS checker_name
+            pj_checker.nama_pejabat AS checker_name,
+            sp.chatid
         FROM (            
             SELECT 
                 p.pejid,
@@ -37,6 +107,8 @@ export async function getMarketingStructure(year, month, filters = {}) {
             ON pj.jabid = j.jabid
         LEFT JOIN pj_tst_pejabat_divisi_lama pj_checker 
             ON driver.checker_id = pj_checker.pejid AND driver.tahun = pj_checker.tahun AND driver.bulan = pj_checker.bulan
+        LEFT JOIN pj_sales_person sp
+            ON pj.pejid = sp.pejid    
         WHERE 1=1
     `;
 
@@ -224,3 +296,5 @@ export async function copyPreviousMonthData(targetYear, targetMonth) {
 
     return true;
 }
+
+

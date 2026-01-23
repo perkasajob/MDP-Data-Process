@@ -18,13 +18,43 @@
         label="Distributor"
       />
       
-      <q-input
+
+      <q-select
         filled
-        v-model="date"
-        type="date"
-        label="Date"
-        stack-label
+        v-model="ecatFilter"
+        :options="['ECAT', 'Non ECAT', 'All']"
+        label="ECAT Filter"
       />
+
+      <div class="row q-col-gutter-sm">
+        <div class="col-12">
+          <q-select
+            filled
+            v-model="reportRange"
+            :options="['yesterday', 'this month', 'last month', 'this year']"
+            label="Report Time Range"
+            clearable
+          />
+        </div>
+        <div class="col-6">
+          <q-input
+            filled
+            v-model="startDate"
+            type="date"
+            label="Report Start Date"
+            stack-label
+          />
+        </div>
+        <div class="col-6">
+          <q-input
+            filled
+            v-model="endDate"
+            type="date"
+            label="Report End Date"
+            stack-label
+          />
+        </div>
+      </div>
 
       
       <!-- File Picker -->
@@ -58,6 +88,7 @@
         <q-btn color="primary" label="Get FTP" @click="handleGetFtp" :loading="loadingFtp" />
         <q-btn color="secondary" label="Submit" @click="handleSubmit" :loading="loadingSubmit" />
         <q-btn color="accent" label="Create Sales Report" @click="handleCreateReport" :loading="loadingReport" />
+        <q-btn color="deep-purple" icon="send" label="Telegram Report" @click="handleTelegramReport" :loading="loadingTelegram" />
       </div>
 
 
@@ -67,9 +98,9 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { processSales, createSalesReport } from '../services/SalesService'
+import { processSales, createSalesReport, sendTelegramReport } from '../services/SalesService'
 import { updateOutletsFromCsv } from '../services/OutletService'
 import { downloadFtpFiles } from '../services/FtpService'
 import dayjs from 'dayjs'
@@ -78,14 +109,39 @@ import { HOME_DIR } from '../const'
 const $q = useQuasar()
 const distributor = ref('APL')
 const distributorOptions = ['APL', 'TSJ', 'PPG', 'ALL']
-const date = ref(dayjs().format('YYYY-MM-DD'))
+const ecatFilter = ref('Non ECAT')
 const salesFile = ref(null)
+
+const reportRange = ref('yesterday')
+const yesterdayStr = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+const startDate = ref(yesterdayStr)
+const endDate = ref(yesterdayStr)
 
 const loadingFtp = ref(false)
 const loadingSubmit = ref(false)
 const loadingReport = ref(false)
+const loadingTelegram = ref(false)
 const loadingUpdate = ref(false)
 const updateFile = ref(null)
+
+watch(reportRange, (val) => {
+  if (!val) return
+  const today = dayjs()
+  if (val === 'yesterday') {
+    const yesterday = today.subtract(1, 'day').format('YYYY-MM-DD')
+    startDate.value = yesterday
+    endDate.value = yesterday
+  } else if (val === 'this month') {
+    startDate.value = today.startOf('month').format('YYYY-MM-DD')
+    endDate.value = today.format('YYYY-MM-DD')
+  } else if (val === 'last month') {
+    startDate.value = today.subtract(1, 'month').startOf('month').format('YYYY-MM-DD')
+    endDate.value = today.subtract(1, 'month').endOf('month').format('YYYY-MM-DD')
+  } else if (val === 'this year') {
+    startDate.value = today.startOf('year').format('YYYY-MM-DD')
+    endDate.value = today.format('YYYY-MM-DD')
+  }
+})
 
 async function handleGetFtp() {
   loadingFtp.value = true
@@ -127,7 +183,7 @@ async function handleSubmit() {
   
   loadingSubmit.value = true
   try {
-    await processSales(distributor.value, date.value, filePath)
+    await processSales(distributor.value, startDate.value, filePath)
     $q.notify({ type: 'positive', message: 'Sales Processed Successfully' })
   } catch (e) {
     console.error(e)
@@ -140,7 +196,7 @@ async function handleSubmit() {
 async function handleCreateReport() {
   loadingReport.value = true
   try {
-    const res = await createSalesReport()
+    const res = await createSalesReport(ecatFilter.value, startDate.value, endDate.value)
     $q.notify({ 
         type: 'positive', 
         message: `Report Created: ${res.fullPath} (${res.unmatchedCount} unmatched)`,
@@ -151,6 +207,23 @@ async function handleCreateReport() {
     $q.notify({ type: 'negative', message: 'Report Error: ' + e.message })
   } finally {
     loadingReport.value = false
+  }
+}
+
+async function handleTelegramReport() {
+  loadingTelegram.value = true
+  try {
+    const results = await sendTelegramReport(startDate.value)
+    $q.notify({ 
+        type: 'positive', 
+        message: `Telegram Report Sent. Valid: ${results.sent}, Skipped: ${results.skipped}`,
+        timeout: 5000
+    })
+  } catch (e) {
+    console.error(e)
+    $q.notify({ type: 'negative', message: 'Telegram Error: ' + e.message })
+  } finally {
+    loadingTelegram.value = false
   }
 }
 

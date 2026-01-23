@@ -109,6 +109,8 @@
         </template>
       </q-table>
     </div>
+
+
   </q-page>
 </template>
 
@@ -116,6 +118,8 @@
 import { ref, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
 import { getPanelData, searchMr, savePanelRow, deletePanelRow, searchPjSales } from '../services/PanelService'
+
+
 
 const $q = useQuasar()
 const rows = ref([])
@@ -132,6 +136,10 @@ const salesFilters = ref({
     nama_produk: '',
     mr_name: ''
 })
+
+// Update Target State
+
+
 const salesColumns = [
     { name: 'nomor_faktur', label: 'Nomor Faktur', field: 'nomor_faktur', sortable: true, align: 'left' },
     { name: 'tanggal_faktur', label: 'Tanggal', field: 'tanggal_faktur', sortable: true, align: 'left', format: val => {
@@ -278,6 +286,8 @@ async function onSelectSales(row) {
         $q.notify({ type: 'negative', message: 'Failed to add panel row: ' + e.message })
     }
 }
+
+
 
 onMounted(() => {
   loadData()

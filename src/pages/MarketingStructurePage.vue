@@ -77,6 +77,7 @@
     <div class="q-mb-md row q-gutter-sm">
         <q-btn color="primary" icon="add" label="Add Row" @click="addNewRow" />
         <q-btn color="positive" icon="save" label="Save" @click="saveAll" :loading="saving" />
+        <q-btn color="secondary" icon="download" label="Export CSV" @click="exportCSV" :loading="exporting" />
     </div>
 
     <div class="table-container shadow-2">
@@ -194,7 +195,8 @@ import {
     saveMarketingRow,
     searchPejabat,
     copyPreviousMonthData,
-    deleteMarketingStructure
+    deleteMarketingStructure,
+    exportMarketingStructure
 } from '../services/MarketingService'
 
 const $q = useQuasar()
@@ -207,6 +209,7 @@ const filterCheckerName = ref('')
 const rows = ref([])
 const loading = ref(false)
 const saving = ref(false)
+const exporting = ref(false)
 
 const jabatanOptions = ref([])
 const checkerOptions = ref([])
@@ -471,6 +474,25 @@ async function filterCheckerFn(val, update) {
         const names = results.map(r => r.nama_pejabat)
         filterCheckerOptions.value = [...new Set(names)]
     })
+}
+
+async function exportCSV() {
+    exporting.value = true
+    try {
+        const filePath = await exportMarketingStructure(filterYear.value, filterMonth.value)
+        $q.notify({ 
+            type: 'positive', 
+            message: `Exported successfully: ${filePath}`,
+            timeout: 5000
+        })
+        // Try opening the folder?
+        const { shell } = window.require('electron')
+        shell.showItemInFolder(filePath)
+    } catch (e) {
+        $q.notify({ type: 'negative', message: 'Export failed: ' + e.message })
+    } finally {
+        exporting.value = false
+    }
 }
 
 onMounted(() => {
