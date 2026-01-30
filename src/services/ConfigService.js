@@ -29,3 +29,16 @@ export function getConfig() {
     if (!config) return loadConfig();
     return config;
 }
+
+export function saveConfig(newConfig) {
+    try {
+        const configPath = path.join(HOME_DIR, 'config.yaml');
+        const yamlStr = yaml.dump(newConfig);
+        fs.writeFileSync(configPath, yamlStr, 'utf8');
+        config = newConfig; // update in-memory config
+        return true;
+    } catch (e) {
+        console.error('Error saving config:', e);
+        throw e;
+    }
+}

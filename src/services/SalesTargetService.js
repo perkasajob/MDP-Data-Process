@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import { getDbConnection } from './DbService';
 import logger from './LoggerService';
+import { getNum } from '../utils/NumberHelper';
 
 const fs = window.require('fs');
 const xlsx = window.require('xlsx');
@@ -34,26 +35,21 @@ export async function updateSalesTargets(filePath, dateStr) {
 
     let updatedCount = 0;
 
-    // Helper to get safe numeric value
-    const getNum = (val) => {
-        if (val === undefined || val === null || val === '') return 0;
-        const num = Number(val);
-        return isNaN(num) ? 0 : num;
-    };
+
 
     for (const row of rows) {
         // row is an array of values. 
         // Col A=0, B=1, C=2, D=3, E=4, F=5, G=6
         // row is 0-indexed based on the range we selected. 
         // If range=19 (row 20), then row[0] is Column A of row 20.
-        // We want Column D (index 3), E (4), F (5), G (6)
+        // We want Column D (index 3), F (5), G (6), H (7)
         const key = row[3]; // Column D
 
-        if (!key) continue; // Skip if key is empty
+        if (!key) continue; // Skip if key is empty        
 
-        const target = getNum(row[4]);  // Column E
-        const target1 = getNum(row[5]); // Column F
-        const target2 = getNum(row[6]); // Column G
+        const target = getNum(row[5]);  // Column F
+        const target1 = getNum(row[6]); // Column G
+        const target2 = getNum(row[7]); // Column H
 
         // Update Query
         // Using LIKE %key% for nama_pejabat
@@ -66,7 +62,7 @@ export async function updateSalesTargets(filePath, dateStr) {
 
         const [result] = await connection.execute(sql, [
             target, target1, target2,
-            tahun, bulan, `%${key.trim()}%`
+            tahun, bulan, `%${key.replace(/\s/g, "")}%`
         ]);
 
         if (result.affectedRows > 0) {
@@ -74,8 +70,69 @@ export async function updateSalesTargets(filePath, dateStr) {
         }
     }
 
-    logger.info(`Updated sales targets.Total affected rows: ${updatedCount} `);
-    processSalesTargets(connection, tahun, bulan)
+    logger.info(`Updated sales targets. Total affected rows: ${updatedCount}`);
+
+    // Perform hierarchy calculation (DM/SM sum of MRs)
+    await processSalesTargets(connection, tahun, bulan);
+
+    // Update DM/SM targets specifically if provided in the file (overrides calculated sums)
+    // Optimization: Pass existing rows to avoid re-reading the file
+    await updateDMSMSalesTargets(rows, tahun, bulan);
+
+    return updatedCount;
+}
+
+/**
+ * Updates DM/SM sales targets from existing rows where Column E contains pejid.
+ * This overrides any calculated values from processSalesTargets.
+ */
+export async function updateDMSMSalesTargets(rows, tahun, bulan) {
+    if (!rows || rows.length === 0) {
+        return 0;
+    }
+
+    const connection = getDbConnection();
+    let updatedCount = 0;
+
+    for (const row of rows) {
+        if (!row || row.length < 5) continue;
+
+        // Column E (index 4) contains pejid
+        const pejid = getNum(row[4]);
+
+        // Heuristic: If pejid is too large, it's likely a sales target from an MR row
+        // MRs don't have PEJID in Column E (they have Target there)
+        if (!pejid || pejid === 0 || pejid > 100000) continue;
+
+        // Column F (5) = target, G (6) = target1, H (7) = target2
+        const target = getNum(row[5]);
+        const target1 = getNum(row[6]);
+        const target2 = getNum(row[7]);
+
+        // Skip rows that don't look like target rows (all zeroes)
+        if (target === 0 && target1 === 0 && target2 === 0) continue;
+
+        const sql = `
+            UPDATE pejabat_divisi_lama 
+            SET sales_target = ?, sales_target1 = ?, sales_target2 = ? 
+            WHERE tahun = ? AND bulan = ? AND pejid = ?
+        `;
+
+        try {
+            const [result] = await connection.execute(sql, [
+                target, target1, target2,
+                tahun, bulan, pejid
+            ]);
+
+            if (result.affectedRows > 0) {
+                updatedCount += result.affectedRows;
+            }
+        } catch (error) {
+            logger.error(`Error updating DMSM target for PEJID ${pejid}:`, error);
+        }
+    }
+
+    logger.info(`Updated DM/SM sales targets from provided data. Total affected rows: ${updatedCount}`);
     return updatedCount;
 }
 

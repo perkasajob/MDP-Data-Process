@@ -835,9 +835,13 @@ export async function sendTelegramReport(startDate, endDate) {
             message += `\n\n📌 <b>Breakdown Sales SM:</b>\n<pre>${breakdown}</pre>`;
         }
 
+        if (config.telegram_footnote) {
+            message += `\n\n${config.telegram_footnote}`;
+        }
+
         try {
             // TODO: Uncomment this to enable Telegram sending pjob
-            await sendTelegramMessage(token, chatid, message);
+            // await sendTelegramMessage(token, chatid, message);
             console.log(pejid);
             console.log(message);
             sentCount++;

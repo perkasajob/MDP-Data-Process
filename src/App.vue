@@ -1,5 +1,5 @@
 <template>
-  <q-layout view="hHh kpR fFf">
+  <q-layout view="hHh LpR fFf">
     <q-header elevated class="bg-primary text-white">
       <q-toolbar>
         <q-btn dense flat round icon="menu" @click="toggleLeftDrawer" />
@@ -48,6 +48,13 @@
           </q-item-section>
           <q-item-section>Sales Target</q-item-section>
         </q-item>
+        <q-separator />
+        <q-item clickable v-ripple @click="activeTab = 'settings'" :active="activeTab === 'settings'">
+          <q-item-section avatar>
+            <q-icon name="settings" />
+          </q-item-section>
+          <q-item-section>Settings</q-item-section>
+        </q-item>
       </q-list>
     </q-drawer>
 
@@ -73,6 +80,7 @@ const PanelPage = defineAsyncComponent(() => import('./pages/PanelPage.vue'))
 const MarketingStructurePage = defineAsyncComponent(() => import('./pages/MarketingStructurePage.vue'))
 const OutletEditorPage = defineAsyncComponent(() => import('./pages/OutletEditorPage.vue'))
 const SalesTargetPage = defineAsyncComponent(() => import('./pages/SalesTargetPage.vue'))
+const SettingsPage = defineAsyncComponent(() => import('./pages/SettingsPage.vue'))
 
 const activeComponent = computed(() => {
   if (activeTab.value === 'data-process') return DataProcessPage
@@ -81,6 +89,7 @@ const activeComponent = computed(() => {
   if (activeTab.value === 'marketing-structure') return MarketingStructurePage
   if (activeTab.value === 'outlet-panel') return OutletEditorPage
   if (activeTab.value === 'sales-target') return SalesTargetPage
+  if (activeTab.value === 'settings') return SettingsPage
   return null
 })
 </script>
