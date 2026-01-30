@@ -178,9 +178,7 @@ async function processDBF(filePath) {
 
 // ... helper functions from mdp.js ...
 function extractCityName(str) {
-    const parts = str.trim().split(/\s+/);
-    const city = parts[parts.length - 1];
-    return city.toLowerCase()
+    return str.match(/PT\. APL\s(.+)/)[1].toLowerCase()
 }
 
 async function getOutletDetailsContentAPL() {
@@ -209,7 +207,7 @@ async function getOutletDetailsContentAPL() {
 }
 
 async function getSlhId(connection) {
-    const [rows] = await connection.execute(`SELECT comid, MAX(slhid) AS last_slhid FROM sales.sales_harian GROUP BY comid;`);
+    const [rows] = await connection.execute(`SELECT comid, MAX(slhid) AS last_slhid FROM sales.pj_sales_harian GROUP BY comid;`);
     const last_slhids = rows.reduce((acc, item) => { acc[item.comid] = Number(item.last_slhid); return acc; }, {});
     return last_slhids;
 }
@@ -226,8 +224,8 @@ async function processAPL(rows) {
     const [existingRows] = await connection.execute('SELECT DISTINCT kode_outlet FROM pj_outlets WHERE distributor LIKE "APL-%"');
     const existingOutlets = new Set(existingRows.map(r => r.kode_outlet));
 
-    let sql_outlet = "INSERT INTO pj_outlets (kode_outlet, distributor, disid, outlet, alamat, kota, kode_pos, distrik, tipe_outlet) VALUES ";
-    let sql = "REPLACE INTO pj_sales (dist, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value, net_value, po_outlet, batch_no, disc_distributor, ecat) VALUES ";
+    const salesValues = [];
+    const outletValues = [];
 
     // Extract all invoice numbers from rows to narrow down the DB query
     const invoiceNos = [...new Set(rows.slice(1, -1).map(r => r['Invoice No']).filter(n => !!n))];
@@ -235,55 +233,82 @@ async function processAPL(rows) {
     let existingSales = new Set();
     if (invoiceNos.length > 0) {
         // Fetch existing records for these invoices
-        const [existingRows] = await connection.query(
-            'SELECT dist, nomor_faktur, item_code FROM pj_sales WHERE nomor_faktur IN (?)',
+        const [dbRows] = await connection.query(
+            'SELECT dist, nomor_faktur, item_code, batch_no FROM pj_sales WHERE nomor_faktur IN (?)',
             [invoiceNos]
         );
-        existingRows.forEach(r => {
-            existingSales.add(`${r.dist}-${r.nomor_faktur}-${r.item_code}`);
+        dbRows.forEach(r => {
+            existingSales.add(`${r.dist}-${r.nomor_faktur}-${r.item_code}-${r.batch_no}`);
         });
     }
 
-    for (let i = 1; i < rows.length - 1; i++) {
-        const disid = rows[i]['Plant'].match(/\d+/g)[0];
+    for (let i = 0; i < rows.length - 1; i++) {
+        const disidMatch = rows[i]['Plant'].match(/\d+/g);
+        const disid = disidMatch ? disidMatch[0] : '';
         if (!rows[i]['Billing Date']) continue;
         const tanggal_faktur = dayjs(rows[i]['Billing Date']).format('YYYY-MM-DD');
         const nomor_faktur = rows[i]['Invoice No'];
         const item_code = rows[i]['Material Code'];
-        const quantity = Number(rows[i]['Qty - Transaction'].replace(/,/g, '').replace(/[^0-9.-]/g, ''));
-        const kode_outlet = rows[i]['Sold To Customer Code'].replace(/^0+/, '');
-        const value = Number(rows[i]['Selling Price'].replace(/,/g, '').replace(/[^0-9.-]/g, ''));
-        const net_value = Number(rows[i]['ID Net Value Principal - Transaction'].replace(/,/g, '').replace(/[^0-9.-]/g, ''));
+        const quantity = Number(rows[i]['Qty - Transaction']?.replace(/,/g, '').replace(/[^0-9.-]/g, '')) || 0;
+        const kode_outlet = rows[i]['Sold To Customer Code']?.replace(/^0+/, '') || '';
+        const value = Number(rows[i]['Selling Price']?.replace(/,/g, '').replace(/[^0-9.-]/g, '')) || 0;
+        const net_value = Number(rows[i]['ID Net Value Principal - Transaction']?.replace(/,/g, '').replace(/[^0-9.-]/g, '')) || 0;
         const po_outlet = rows[i]['Customer PO No'];
         const batch_no = rows[i]['Batch No'];
-        const disc_distributor = (value - Number(rows[i]['Value - Transaction'].replace(/[^0-9.-]/g, ''))) / value * 100;
+        const disc_distributor = net_value === 0 ? 0 : (Number(rows[i]['Value - Transaction']?.replace(/[^0-9.-]/g, '')) - net_value) / net_value * 100;
         const city = extractCityName(rows[i]['Plant']);
-        const plant_code = 'APL-' + city_abbr[city];
+        const plant_code = 'APL-' + (city_abbr[city] || city);
         const ecat = outlet_type[rows[i]['Customer SA Group']] === 'ECAT';
+        if (plant_code.length > 9) {
+            console.log(plant_code)
+        }
 
         if (!city_abbr[city]) {
-            logger.warn(`Area ${city} not found in area list.`);
-            continue;
+            logger.warn(`Area "${city}" not found in area list. add to const.js`);
+            debugger
+            // continue; // Let's not skip, just use the city name as suffix if missing
         }
 
         // Deduplicate sales records in memory AND against Database
-        const saleKey = `${plant_code}-${nomor_faktur}-${item_code}`;
-        if (processedSales.has(saleKey) || existingSales.has(saleKey)) continue;
+        const saleKey = `${plant_code}-${nomor_faktur}-${item_code}-${batch_no}`;
+        if (existingSales.has(saleKey)) continue; //processedSales.has(saleKey) || 
         processedSales.add(saleKey);
 
-        sql += `('${plant_code}', '${disid}', '${tanggal_faktur}', '${nomor_faktur}', '${item_code}', ${quantity}, '${kode_outlet}', ${value}, ${net_value}, '${po_outlet}', '${batch_no}', ${disc_distributor}, ${ecat}),`;
+        salesValues.push([
+            plant_code, disid, tanggal_faktur, nomor_faktur, item_code, quantity,
+            kode_outlet, value, net_value, po_outlet, batch_no, disc_distributor, ecat
+        ]);
 
         if (outlets[kode_outlet]) {
             if (!added_outlets.includes(kode_outlet) && !existingOutlets.has(kode_outlet)) {
-                sql_outlet += `("${kode_outlet}", "${plant_code}", "${disid}", "${outlets[kode_outlet]["Sold To Customer Name"].replace(/"/g, '""')}", "${outlets[kode_outlet]["Location - Sold To Customer Address 1"].replace(/"/g, '""').replace(/'/g, "''")}", "${outlets[kode_outlet]["Sold To City"].replace(/^kota\s*/i, '').replace(/"/g, '""')}", "${outlets[kode_outlet]["Location - Sold To Post Code"]}", "${outlets[kode_outlet]["Sold To District"].replace(/"/g, '""')}","${outlet_type[outlets[kode_outlet]["Customer SA Group"]] || ''}"),`;
+                const o = outlets[kode_outlet];
+                outletValues.push([
+                    kode_outlet, plant_code, disid,
+                    o["Sold To Customer Name"],
+                    o["Location - Sold To Customer Address 1"],
+                    o["Sold To City"]?.replace(/^kota\s*/i, ''),
+                    o["Location - Sold To Post Code"],
+                    o["Sold To District"],
+                    outlet_type[o["Customer SA Group"]] || ''
+                ]);
                 added_outlets.push(kode_outlet);
             }
         }
     }
 
-    if (sql.endsWith(',')) await connection.execute(sql.slice(0, -1));
-    if (added_outlets.length > 0 && sql_outlet.endsWith(',')) {
-        await connection.execute(sql_outlet.slice(0, -1));
+    const CHUNK_SIZE = 500;
+    if (salesValues.length > 0) {
+        const sql = "REPLACE INTO pj_sales (dist, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value, net_value, po_outlet, batch_no, disc_distributor, ecat) VALUES ?";
+        for (let i = 0; i < salesValues.length; i += CHUNK_SIZE) {
+            await connection.query(sql, [salesValues.slice(i, i + CHUNK_SIZE)]);
+        }
+    }
+
+    if (outletValues.length > 0) {
+        const sql_outlet = "INSERT INTO pj_outlets (kode_outlet, distributor, disid, outlet, alamat, kota, kode_pos, distrik, tipe_outlet) VALUES ?";
+        for (let i = 0; i < outletValues.length; i += CHUNK_SIZE) {
+            await connection.query(sql_outlet, [outletValues.slice(i, i + CHUNK_SIZE)]);
+        }
         logger.info(`Inserted ${added_outlets.length} new outlets.`);
     }
 }
@@ -291,70 +316,116 @@ async function processAPL(rows) {
 async function processPPG(rows) {
     const connection = getDbConnection();
     const distributor = 'PPG';
-    let sql = "REPLACE INTO pj_sales (dist, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value) VALUES ";
+    const values = [];
 
     for (let i = 1; i < rows.length - 1; i++) {
-        // logic from mdp.js
-        const disid = 'PPG-' + rows[i]['Branch Code'];
+        const disid = 'PPG-' + (rows[i]['Branch Code'] || '');
         const tanggal_faktur = dayjs(rows[i]['Inv Date'], 'DD-MM-YYYY').isValid()
             ? dayjs(rows[i]['Inv Date'], 'DD-MM-YYYY').format('YYYY-MM-DD')
             : null;
         const nomor_faktur = rows[i]['Inv No'];
         if (!tanggal_faktur) continue;
         const item_code = rows[i]['Part No'];
-        const quantity = rows[i]['Qty'];
+        const quantity = Number(rows[i]['Qty']) || 0;
         const kode_outlet = rows[i]['Customer Id'];
-        const value = rows[i]['Sales Nett (DPP)'];
+        const value = Number(rows[i]['Sales Nett (DPP)']) || 0;
 
-        sql += `('${distributor}', '${disid}', '${tanggal_faktur}', '${nomor_faktur}', '${item_code}', ${quantity}, '${kode_outlet}', ${value}),`;
+        values.push([distributor, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value]);
     }
 
-    if (sql.endsWith(',')) await connection.execute(sql.slice(0, -1));
+    if (values.length > 0) {
+        const sql = "REPLACE INTO pj_sales (dist, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value) VALUES ?";
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < values.length; i += CHUNK_SIZE) {
+            await connection.query(sql, [values.slice(i, i + CHUNK_SIZE)]);
+        }
+    }
 }
 
 async function processTSJ(rows) {
     const connection = getDbConnection();
     const distributor = 'TSJ';
-    let sql = "REPLACE INTO pj_sales (dist, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value) VALUES ";
+    const values = [];
 
     for (let i = 1; i < rows.length - 1; i++) {
         const disid = rows[i]['KODECAB'];
         const tanggal_faktur = dayjs(rows[i]['TGLDOKJDI']).format('YYYY-MM-DD');
         const nomor_faktur = rows[i]['NODOKJDI'];
         const item_code = rows[i]['KODEPROD'];
-        const quantity = rows[i]['BANYAK'];
+        const quantity = Number(rows[i]['BANYAK']) || 0;
         const kode_outlet = `${rows[i]['GRUPLANG']}${rows[i]['KODELANG']}`;
-        const value = rows[i]['NETSALES'];
+        const value = Number(rows[i]['NETSALES']) || 0;
 
-        sql += `('${distributor}', '${disid}', '${tanggal_faktur}', '${nomor_faktur}', '${item_code}', ${quantity}, '${kode_outlet}', ${value}),`;
+        values.push([distributor, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value]);
     }
-    if (sql.endsWith(',')) await connection.execute(sql.slice(0, -1));
+
+    if (values.length > 0) {
+        const sql = "REPLACE INTO pj_sales (dist, disid, tanggal_faktur, nomor_faktur, item_code, quantity, kode_outlet, value) VALUES ?";
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < values.length; i += CHUNK_SIZE) {
+            await connection.query(sql, [values.slice(i, i + CHUNK_SIZE)]);
+        }
+    }
 }
 
 async function submitSalesReport(rows) {
     const connection = getDbConnection();
     try {
         let slhids = await getSlhId(connection);
-        const validRows = rows.filter(row => row.proid !== null && row.proid !== undefined);
-        const invalidRows = rows.filter(row => row.proid === null || row.proid === undefined);
+        const validRows = rows.filter(row =>
+            row.proid != null &&
+            row.outid != null &&
+            row.comid != null
+        );
+        const invalidRows = rows.filter(row =>
+            row.proid == null ||
+            row.outid == null ||
+            row.comid == null
+        );
 
         if (invalidRows.length > 0) {
             Dialog.create({
                 title: 'Warning',
-                message: `${invalidRows.length} rows have missing Product IDs and will be skipped. Please check product mappings.`,
+                message: `${invalidRows.length} rows have missing Product or Outlet mappings and will be skipped. Please check mapping tables.`,
                 color: 'warning'
             });
-            return;
+            // We continue with validRows instead of returning
         }
 
-        const data = validRows.map(row => {
+        // Filter out records that already exist in pj_sales_harian based on (nomor_faktur, proid, value_asli)
+        const invoiceNos = [...new Set(validRows.map(r => r.nomor_faktur).filter(n => !!n))];
+        let existingSet = new Set();
+        if (invoiceNos.length > 0) {
+            // Fetch existing records for these invoices to prevent duplicates
+            const [existing] = await connection.query(
+                'SELECT nomor_faktur, proid, value_asli FROM sales.pj_sales_harian WHERE nomor_faktur IN (?)',
+                [invoiceNos]
+            );
+            existing.forEach(r => {
+                existingSet.add(`${r.nomor_faktur}|${r.proid}|${Number(r.value_asli)}`);
+            });
+        }
+
+        const processedKeys = new Set();
+        const data = [];
+
+        for (const row of validRows) {
+            const key = `${row.nomor_faktur}|${row.proid}|${Number(row.value)}`;
+
+            // Skip if already in database or if it's a duplicate within the current set
+            if (existingSet.has(key) || processedKeys.has(key)) continue;
+            processedKeys.add(key);
+
             // Ensure slhids for this comid exists, if not start at 0
             if (slhids[row.comid] === undefined) {
                 slhids[row.comid] = 0;
             }
             slhids[row.comid]++;
 
-            return [
+            const disidMatch = String(row.disid).match(/\d+/g);
+            const disid = disidMatch ? disidMatch[0] : row.disid;
+
+            data.push([
                 row.comid,
                 slhids[row.comid],
                 row.tahun,
@@ -364,7 +435,7 @@ async function submitSalesReport(rows) {
                 row.quantity,
                 null, null, null, null, // thn_retur, bln_retur, qty_retur, realokasi
                 row.proid,
-                row.disid.match(/\d+/g)[0], // expected disid to be a number
+                disid,
                 row.outid,
                 row.distributor,
                 row.outlet,
@@ -377,16 +448,19 @@ async function submitSalesReport(rows) {
                 row.disc_berno,
                 row.disc_distributor,
                 row.disc_p,
-                row.value
-            ];
-        });
+                row.value // maps to value_asli
+            ]);
+        }
 
         if (data.length === 0) return;
 
+        const sql = "INSERT INTO sales.pj_sales_harian (comid, slhid, tahun, bulan, tanggal_faktur, nomor_faktur, quantity, thn_retur, bln_retur, qty_retur, realokasi, proid, disid, outid, distributor, outlet, product, bonus, hna, diskon, kode_outlet, value_net, disc_berno, disc_distributor, disc_p, value_asli) VALUES ?";
 
-        const sql = "INSERT INTO sales.sales_harian (comid, slhid, tahun, bulan, tanggal_faktur, nomor_faktur, quantity, thn_retur, bln_retur, qty_retur, realokasi, proid, disid, outid, distributor, outlet, product, bonus, hna, diskon, kode_outlet, value_net, disc_berno, disc_distributor, disc_p, value_asli) VALUES ?";
-
-        await connection.query(sql, [data]);
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+            const chunk = data.slice(i, i + CHUNK_SIZE);
+            await connection.query(sql, [chunk]);
+        }
     } catch (error) {
         logger.error('Error in submitSalesReport:', error);
         throw error;
@@ -402,41 +476,27 @@ async function updateSalesCache(connection, rows) {
 
     logger.info(`Updating pj_sales with ${rows.length} rows of enriched data...`);
 
-    // Using INSERT ... ON DUPLICATE KEY UPDATE for batch performance.
-    // Assumes pj_sales has a unique key on (dist, nomor_faktur, item_code).
     const updateSql = `
-        INSERT INTO sales.pj_sales (
-            dist, nomor_faktur, item_code,
-            comid, outid, outlet, alamat, 
-            proid, product, batch_no, urut_prod, hnr, 
-            disc_amt, disc_p, disc_berno, hnr2, nama_grup, 
-            TPID, TP, SPVID, SPV, DMID, DM, 
-            AMID, AM, SMID, SM, GSMID, GSM, 
-            off_mr, off_spv, off_dm, off_am, SP_SALES, DPLID
-        ) VALUES ?
-        ON DUPLICATE KEY UPDATE 
-            comid = VALUES(comid), outid = VALUES(outid), outlet = VALUES(outlet), alamat = VALUES(alamat), 
-            proid = VALUES(proid), product = VALUES(product), batch_no = VALUES(batch_no), urut_prod = VALUES(urut_prod), hnr = VALUES(hnr), 
-            disc_amt = VALUES(disc_amt), disc_p = VALUES(disc_p), disc_berno = VALUES(disc_berno), hnr2 = VALUES(hnr2), nama_grup = VALUES(nama_grup), 
-            TPID = VALUES(TPID), TP = VALUES(TP), SPVID = VALUES(SPVID), SPV = VALUES(SPV), DMID = VALUES(DMID), DM = VALUES(DM), 
-            AMID = VALUES(AMID), AM = VALUES(AM), SMID = VALUES(SMID), SM = VALUES(SM), GSMID = VALUES(GSMID), GSM = VALUES(GSM), 
-            off_mr = VALUES(off_mr), off_spv = VALUES(off_spv), off_dm = VALUES(off_dm), off_am = VALUES(off_am), SP_SALES = VALUES(SP_SALES), DPLID = VALUES(DPLID)
+        UPDATE sales.pj_sales SET
+            comid = ?, outid = ?, outlet = ?, alamat = ?, 
+            proid = ?, product = ?, urut_prod = ?, hnr = ?, 
+            disc_amt = ?, disc_p = ?, disc_berno = ?, hnr2 = ?, nama_grup = ?, 
+            TPID = ?, TP = ?, SPVID = ?, SPV = ?, DMID = ?, DM = ?, 
+            AMID = ?, AM = ?, SMID = ?, SM = ?, GSMID = ?, GSM = ?, 
+            off_mr = ?, off_spv = ?, off_dm = ?, off_am = ?, SP_SALES = ?, DPLID = ?
+        WHERE dist = ? AND nomor_faktur = ? AND item_code = ?
     `;
 
-    const values = rows.map(r => [
-        r.distributor, r.nomor_faktur, r.item_code,
-        r.comid, r.outid, r.outlet, r.alamat,
-        r.proid, r.product, r.batch_no, r.urut_prod, r.hnr,
-        r.disc_amt, r.disc_p, r.disc_berno, r.hnr2, r.nama_grup,
-        r.TPID, r.TP, r.SPVID, r.SPV, r.DMID, r.DM,
-        r.AMID, r.AM, r.SMID, r.SM, r.GSMID, r.GSM,
-        r.off_mr, r.off_spv, r.off_dm, r.off_am, r.SP_SALES, r.DPLID
-    ]);
-
-    const CHUNK_SIZE = 1000;
-    for (let i = 0; i < values.length; i += CHUNK_SIZE) {
-        const chunk = values.slice(i, i + CHUNK_SIZE);
-        await connection.query(updateSql, [chunk]);
+    for (const r of rows) {
+        await connection.query(updateSql, [
+            r.comid, r.outid, r.outlet, r.alamat,
+            r.proid, r.product, r.urut_prod, r.hnr,
+            r.disc_amt, r.disc_p, r.disc_berno, r.hnr2, r.nama_grup,
+            r.TPID, r.TP, r.SPVID, r.SPV, r.DMID, r.DM,
+            r.AMID, r.AM, r.SMID, r.SM, r.GSMID, r.GSM,
+            r.off_mr, r.off_spv, r.off_dm, r.off_am, r.SP_SALES, r.DPLID,
+            r.distributor, r.nomor_faktur, r.item_code
+        ]);
     }
     logger.info('Finished updating pj_sales cache.');
 }
@@ -508,16 +568,17 @@ export async function createSalesReport(ecatFilter = 'Non ECAT', startDate, endD
         SELECT 
             EXTRACT(YEAR FROM s.tanggal_faktur) AS tahun,
             EXTRACT(MONTH FROM s.tanggal_faktur) AS bulan,
-            o.comid, o.disid, s.dist AS distributor, o.outid, o.outlet, o.alamat, 
+            o.comid, s.disid, s.dist AS distributor, o.outid, o.outlet, o.alamat, 
             s.tanggal_faktur, s.nomor_faktur, s.item_code, s.po_outlet, s.kode_outlet,
             xp.id AS proid, mg.produk AS product, s.batch_no, mg.urut_prod, s.quantity,
             mg.hna AS hnr, s.value AS value, s.disc_distributor,
-            (s.value - s.net_value) AS disc_amt,
-            1-(s.net_value/s.value) AS disc_p,
-            1-(s.net_value/s.value) AS disc_berno,
+            (s.value * s.quantity - s.net_value) AS disc_amt,
+            1-(s.net_value/s.value / s.quantity) AS disc_p,
+            1-(s.net_value/s.value / s.quantity) AS disc_berno,
             (s.net_value/s.quantity) AS hnr2,
             s.net_value AS value_net,
             mg.nama_grup AS nama_grup,
+            s.ecat,
             COALESCE(sp.mrid, o.mrid) AS TPID,
             ms.MR AS TP, ms.SPVID, ms.SPV, ms.DMID, ms.DM, ms.AMID, ms.AM, ms.SMID, ms.SM, ms.GSMID, ms.GSM,
             NULL AS off_mr, NULL AS off_spv, NULL AS off_dm, NULL AS off_am, NULL AS SP_SALES, NULL AS DPLID
@@ -535,7 +596,9 @@ export async function createSalesReport(ecatFilter = 'Non ECAT', startDate, endD
     const [rows] = await connection.execute(query, params);
 
     // 1. Sync generated data back to pj_sales cache
-    await updateSalesCache(connection, rows);
+    // Filter out rows where mandatory IDs are missing (e.g. unmapped outlets/products)
+    const validCacheRows = rows.filter(r => r.outid != null && r.proid != null && r.comid != null);
+    await updateSalesCache(connection, validCacheRows);
 
     const reportDir = path.join(HOME_DIR, 'report');
     if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true });
@@ -614,7 +677,7 @@ export async function createSalesReport(ecatFilter = 'Non ECAT', startDate, endD
 }
 
 
-export async function sendTelegramReport(selectedDate) {
+export async function sendTelegramReport(startDate, endDate) {
     const config = getConfig();
     const token = config.telegram_bot_token;
 
@@ -623,9 +686,10 @@ export async function sendTelegramReport(selectedDate) {
     }
 
     const connection = getDbConnection();
-    const now = dayjs(selectedDate);
+    const now = dayjs(endDate);
     const year = now.year();
     const month = now.month() + 1;
+    const formattedDate = (startDate === endDate) ? now.format('DD-MM-YYYY') : `${dayjs(startDate).format('DD-MM-YYYY')} - ${now.format('DD-MM-YYYY')}`;
 
     // 1. Get Targets
     // Assuming pejabat_divisi_lama has pejid, target, tahun, bulan
@@ -642,31 +706,26 @@ export async function sendTelegramReport(selectedDate) {
 
     // 2. Get Contacts
     const [contacts] = await connection.execute(
-        'SELECT pejid, chatid FROM sales.pj_sales_person'
+        'SELECT pejid, chatid, `all` FROM sales.pj_sales_person'
     );
-    const contactMap = {};
+    const targetContactMap = {}; // pejid -> chatid
+    const allReportContacts = []; // list of {chatid, pejid?}
+
     contacts.forEach(c => {
-        if (c.chatid) contactMap[c.pejid] = c.chatid;
+        if (!c.chatid) return;
+        if (c.pejid) targetContactMap[c.pejid] = c.chatid;
+        if (c.all) allReportContacts.push({ chatid: c.chatid, pejid: c.pejid });
     });
 
     // 3. Get Sales Data (Aggregated)
-    // Query sales_harian for the month
     const sqlSales = `
         SELECT 
-            ms.MRID, ms.DMID, ms.SMID,
-            SUM(s.value_net) as val
-        FROM sales.sales_harian s
-        LEFT JOIN sales.pj_outlets o 
-            ON o.kode_outlet = s.kode_outlet 
-            AND o.distributor = s.distributor
-        LEFT JOIN sales.pj_sales_panel sp 
-            ON sp.nomor_faktur = s.nomor_faktur 
-            AND sp.proid = s.proid
-        LEFT JOIN sales.mkt_structure ms 
-            ON ms.MRID = COALESCE(sp.mrid, o.mrid)
-            AND ms.tahun = s.tahun AND ms.bulan = s.bulan
-        WHERE s.tahun = ? AND s.bulan = ?
-        GROUP BY ms.MRID, ms.DMID, ms.SMID
+            s.TPID, s.TP, s.DMID, s.DM, s.SMID, s.SM,
+            SUM(s.net_value) as val
+        FROM sales.pj_sales s  
+        WHERE EXTRACT(YEAR FROM s.tanggal_faktur) = ? 
+          AND EXTRACT(MONTH FROM s.tanggal_faktur) = ?
+        GROUP BY s.TPID, s.TP, s.DMID, s.DM, s.SMID, s.SM
     `;
 
     const [salesRows] = await connection.execute(sqlSales, [year, month]);
@@ -674,7 +733,7 @@ export async function sendTelegramReport(selectedDate) {
     const salesByPerson = { all: 0 };
     salesRows.forEach(row => {
         const v = Number(row.val) || 0;
-        if (row.MRID) salesByPerson[row.MRID] = (salesByPerson[row.MRID] || 0) + v;
+        if (row.TPID) salesByPerson[row.TPID] = (salesByPerson[row.TPID] || 0) + v;
         if (row.DMID) salesByPerson[row.DMID] = (salesByPerson[row.DMID] || 0) + v;
         if (row.SMID) salesByPerson[row.SMID] = (salesByPerson[row.SMID] || 0) + v;
         salesByPerson.all += v;
@@ -702,22 +761,47 @@ export async function sendTelegramReport(selectedDate) {
     let sentCount = 0;
     let skippedCount = 0;
 
+    // Get Global Target (Sum of jabid=4 and is_active=1)
+    const [globalTargetRow] = await connection.execute(
+        'SELECT SUM(sales_target) as total FROM sales.pejabat_divisi_lama WHERE tahun = ? AND bulan = ? AND jabid = 4 AND is_active = 1',
+        [year, month]
+    );
+    const globalTargetVal = Number(globalTargetRow[0]?.total || 0);
+
+    // Build list of all messages to be sent
+    const pendingMessages = [];
+
+    // Individual Targets
     for (const t of targets) {
-        const pejid = t.pejid;
-        const target = Number(t.sales_target);
-        if (!target) continue; // Skip 0 targets?        
-
-        const chatid = contactMap[pejid];
-        if (!chatid) {
-            // logger.warn(`No chatid for pejid ${pejid}`);
-            skippedCount++;
-            continue;
+        const chatid = targetContactMap[t.pejid];
+        if (chatid) {
+            pendingMessages.push({
+                pejid: t.pejid,
+                chatid: chatid,
+                target: Number(t.sales_target),
+                salesNet: salesByPerson[t.pejid] || 0,
+                isAll: false
+            });
         }
+    }
 
+    // All-Report Recipients (everyone with all=1/true)
+    for (const contact of allReportContacts) {
+        pendingMessages.push({
+            pejid: contact.pejid || 'Global',
+            chatid: contact.chatid,
+            target: globalTargetVal,
+            salesNet: salesByPerson.all,
+            isAll: true
+        });
+    }
 
-        const salesNet = salesByPerson[pejid] || 0;
+    for (const msg of pendingMessages) {
+        const { pejid, chatid, target, salesNet, isAll } = msg;
+
+        if (!target && !isAll) continue;
+
         const dailyTarget = target / totalWorkingDays;
-
         const kekurangan = (progressingWorkingDays * dailyTarget) - salesNet;
         const sisaHari = totalWorkingDays - progressingWorkingDays;
 
@@ -725,22 +809,40 @@ export async function sendTelegramReport(selectedDate) {
         if (sisaHari > 0) {
             updateVal = dailyTarget + (kekurangan / sisaHari);
         } else {
-            // Fallback if sisaHari is 0 (last day or past)
-            updateVal = dailyTarget + (kekurangan); // Just an approximation
+            updateVal = dailyTarget + (kekurangan);
         }
 
         const fmt = (n) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0, notation: "compact", compactDisplay: "short", }).format(n);
+        const escapeHtml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
-        const message =
-            `Sales Report ${now.subtract(1, 'days').format('DD-MM-YYYY')}\n
-🎯 Target         : ${fmt(target)} \n💰 Sales          : ${fmt(salesNet)} \n📅 Hari Aktif   : ${progressingWorkingDays} / ${totalWorkingDays}\n
-🥅 Target Harian: ${fmt(dailyTarget)} \n📉 Defisit        : ${fmt(kekurangan)} \n⏳ Sisa Hari    : ${sisaHari} \n📊 Update       : ${fmt(updateVal)}`;
+        let message =
+            `<b>Sales Report ${formattedDate}</b>\n\n` +
+            `🎯 Target         : ${fmt(target)} \n💰 Sales          : ${fmt(salesNet)} \n📅 Hari Aktif   : ${progressingWorkingDays} / ${totalWorkingDays}\n\n` +
+            `🥅 Target Harian: ${fmt(dailyTarget)} \n📉 Defisit        : ${fmt(kekurangan)} \n⏳ Sisa Hari    : ${sisaHari} \n📊 Update       : ${fmt(updateVal)}`;
 
-        console.log(message);
+        // If isAll, add breakdown (complete sales)
+        if (isAll) {
+            const smSales = {};
+            salesRows.forEach(row => {
+                const smName = (row.SM || 'Unknown').split('#')[0].trim();
+                smSales[smName] = (smSales[smName] || 0) + Number(row.val);
+            });
+            const breakdown = Object.entries(smSales)
+                .sort((a, b) => b[1] - a[1])
+                .map(([name, val]) => `${escapeHtml(name).padEnd(20)}: ${fmt(val)}`)
+                .join('\n');
+
+            message += `\n\n📌 <b>Breakdown Sales SM:</b>\n<pre>${breakdown}</pre>`;
+        }
 
         try {
+            // TODO: Uncomment this to enable Telegram sending pjob
             await sendTelegramMessage(token, chatid, message);
+            console.log(pejid);
+            console.log(message);
             sentCount++;
+            // Throttle: pause 1s between messages
+            await new Promise(resolve => setTimeout(resolve, 1000));
         } catch (e) {
             logger.error(`Telegram send failed for pejid ${pejid} (${chatid})`, e.message);
             skippedCount++;
@@ -751,18 +853,14 @@ export async function sendTelegramReport(selectedDate) {
 }
 
 async function sendTelegramMessage(token, chatId, text) {
-    // In Electron/Node context, fetch is available (Node 18+) or we rely on window.fetch if in renderer (but this is Service)
-    // If Service runs in Main process, we need native fetch. 
-    // If Service runs in Renderer process (imported by Vue), we have window.fetch.
-    // Assuming Renderer since it is imported by DataProcessPage.vue
-
     const url = `https://api.telegram.org/bot${token}/sendMessage`;
     const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             chat_id: chatId,
-            text: text
+            text: text,
+            parse_mode: 'HTML'
         })
     });
 

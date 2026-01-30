@@ -11,6 +11,7 @@
           style="min-width: 150px"
         />
         <q-btn color="info" label="Sync to Meilisearch" @click="handleSync" :loading="loadingSync" />
+        <q-btn color="deep-orange" label="Sync from SalesDivisi2" @click="handleSyncFromHistory" :loading="loadingSyncHistory" />
         <q-btn color="positive" label="Save Changes" @click="handleSave" :loading="loadingSave" />
       </div>
     </div>
@@ -122,7 +123,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
-import { getUnmappedOutlets, saveOutletMappings, searchMeilisearch, searchFuseJs, syncToMeilisearch, searchSql } from '../services/OutletService'
+import { getUnmappedOutlets, saveOutletMappings, searchMeilisearch, searchFuseJs, syncToMeilisearch, searchSql, syncFromSalesDivisi2 } from '../services/OutletService'
 import { searchMr } from '../services/PanelService'
 
 const $q = useQuasar()
@@ -133,6 +134,7 @@ const modifiedRows = ref(new Set()) // Track modified rows by reference or ID
 const searchMethod = ref('SQL')
 
 const loadingSync = ref(false)
+const loadingSyncHistory = ref(false)
 const loadingSave = ref(false)
 const loadingSuggestions = ref(false)
 
@@ -328,6 +330,19 @@ async function handleSync() {
         $q.notify({ type: 'negative', message: 'Sync Failed: ' + e.message })
     } finally {
         loadingSync.value = false
+    }
+}
+
+async function handleSyncFromHistory() {
+    loadingSyncHistory.value = true
+    try {
+        const affectedRows = await syncFromSalesDivisi2()
+        $q.notify({ type: 'positive', message: `Sync Completed. ${affectedRows} outlets updated from history.` })
+        await loadData()
+    } catch (e) {
+        $q.notify({ type: 'negative', message: 'History Sync Failed: ' + e.message })
+    } finally {
+        loadingSyncHistory.value = false
     }
 }
 

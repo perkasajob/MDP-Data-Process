@@ -1,4 +1,6 @@
 import { getDbConnection } from './DbService';
+import { getConfig } from './ConfigService';
+import { HOME_DIR, outlet_type } from '../const';
 
 const MEILI_HOST = 'http://127.0.0.1:7700';
 const MEILI_INDEX = 'pj_outlets';
@@ -368,4 +370,110 @@ export async function saveOutlet(outlet) {
 export async function deleteOutlet(kode_outlet) {
     const connection = getDbConnection();
     await connection.execute('DELETE FROM pj_outlets WHERE kode_outlet = ?', [kode_outlet]);
+}
+
+export async function syncFromSalesDivisi2() {
+    const connection = getDbConnection();
+    const sql = `
+        UPDATE pj_outlets o
+        JOIN (
+        -- Find the latest transaction date per outlet group
+        SELECT 
+            comid, 
+            disid, 
+            distributor, 
+            MAX(tanggal_faktur) as max_tgl
+        FROM salesdivisi2
+        WHERE tahun >= YEAR(CURDATE()) - 1
+        GROUP BY comid, disid, distributor
+        ) latest ON o.disid = latest.disid 
+            AND o.distributor = latest.distributor
+
+        JOIN salesdivisi2 sd ON sd.disid = latest.disid 
+            AND sd.distributor = latest.distributor
+            AND sd.tanggal_faktur = latest.max_tgl
+            AND sd.tahun >= YEAR(CURDATE()) - 1
+
+        -- Validating against matching_outlet to ensure ID consistency
+        JOIN matching_outlet m ON o.kode_outlet = m.kode 
+            AND sd.outid = m.id 
+            AND sd.comid = m.comid
+
+        SET 
+            o.comid = sd.comid,
+            o.mrid = sd.mrid,
+            o.outid = sd.outid
+        WHERE 1=1
+    `;
+    const [result] = await connection.execute(sql);
+    return result.affectedRows;
+}
+export async function updateOutletsFromSalesCsv() {
+    const fs = window.require('fs');
+    const path = window.require('path');
+    const { parse } = window.require('csv-parse/sync');
+    const config = getConfig();
+    const connection = getDbConnection();
+
+    const relativePath = config.apl?.sales_filename;
+    if (!relativePath) throw new Error('config.apl.sales_filename not found in config.yaml');
+
+    const filePath = path.join(HOME_DIR, relativePath);
+    if (!fs.existsSync(filePath)) throw new Error(`File not found: ${filePath}`);
+
+    const fileContent = fs.readFileSync(filePath);
+    const records = parse(fileContent, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true
+    });
+
+    const updates = new Map();
+    for (const r of records) {
+        const rawCode = r['Customer - Sold To Customer Code'];
+        if (!rawCode) continue;
+        const kode_outlet = rawCode.replace(/^0+/, '');
+
+        const key = `${kode_outlet}`;
+        // Adapt sa_group mapping from processAPL logic
+        const saGroupRaw = r['Customer SA Group'];
+        const tipe_outlet = outlet_type[saGroupRaw] || saGroupRaw || '';
+
+        updates.set(key, {
+            kode_outlet,
+            outlet: r['Sold To Customer Name'],
+            alamat: r['Location - Sold To Customer Address 1'],
+            kota: r['Sold To City']?.replace(/^kota\s*/i, ''),
+            kode_pos: r['Location - Sold To Post Code'],
+            distrik: r['Sold To District'],
+            sa_group: r['Customer SA Group'],
+            tipe_outlet
+        });
+    }
+    console.log(updates.size);
+
+    let updatedCount = 0;
+    const sql = `
+        UPDATE pj_outlets 
+        SET outlet = ?, alamat = ?, kota = ?, kode_pos = ?, distrik = ?, tipe_outlet = ?, sa_group = ?
+        WHERE kode_outlet = ? AND distributor LIKE "APL-%"
+    `;
+
+    for (const data of updates.values()) {
+        const [result] = await connection.execute(sql, [
+            data.outlet || null,
+            data.alamat || null,
+            data.kota || null,
+            data.kode_pos || null,
+            data.distrik || null,
+            data.tipe_outlet || null,
+            data.sa_group || null,
+            data.kode_outlet,
+        ]);
+        if (result.affectedRows > 0) {
+            updatedCount++;
+        }
+    }
+
+    return updatedCount;
 }

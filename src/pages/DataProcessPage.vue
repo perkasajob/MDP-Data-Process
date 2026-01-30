@@ -113,7 +113,14 @@ const ecatFilter = ref('Non ECAT')
 const salesFile = ref(null)
 
 const reportRange = ref('yesterday')
-const yesterdayStr = dayjs().subtract(1, 'day').format('YYYY-MM-DD')
+const getYesterdayStr = () => {
+  const today = dayjs()
+  // If today is Monday (1), return Saturday (subtract 2 days), else return yesterday (subtract 1 day)
+  const daysToSubtract = today.day() === 1 ? 2 : 1
+  return today.subtract(daysToSubtract, 'day').format('YYYY-MM-DD')
+}
+
+const yesterdayStr = getYesterdayStr()
 const startDate = ref(yesterdayStr)
 const endDate = ref(yesterdayStr)
 
@@ -128,9 +135,9 @@ watch(reportRange, (val) => {
   if (!val) return
   const today = dayjs()
   if (val === 'yesterday') {
-    const yesterday = today.subtract(1, 'day').format('YYYY-MM-DD')
-    startDate.value = yesterday
-    endDate.value = yesterday
+    const yestStr = getYesterdayStr()
+    startDate.value = yestStr
+    endDate.value = yestStr
   } else if (val === 'this month') {
     startDate.value = today.startOf('month').format('YYYY-MM-DD')
     endDate.value = today.format('YYYY-MM-DD')
@@ -213,7 +220,7 @@ async function handleCreateReport() {
 async function handleTelegramReport() {
   loadingTelegram.value = true
   try {
-    const results = await sendTelegramReport(startDate.value)
+    const results = await sendTelegramReport(startDate.value, endDate.value)
     $q.notify({ 
         type: 'positive', 
         message: `Telegram Report Sent. Valid: ${results.sent}, Skipped: ${results.skipped}`,

@@ -3,6 +3,7 @@
     <div class="row items-center justify-between q-mb-md">
       <div class="text-h4">Outlet Editor</div>
       <div class="row q-gutter-sm">
+        <q-btn color="secondary" label="Update from CSV" icon="refresh" @click="handleUpdateFromSalesCsv" :loading="loadingUpdate" />
         <q-btn color="primary" label="Add Outlet" icon="add" @click="openDialog()" />
       </div>
     </div>
@@ -90,7 +91,7 @@
 <script setup>
 import { ref, onMounted, reactive } from 'vue'
 import { useQuasar } from 'quasar'
-import { searchOutlets, saveOutlet, deleteOutlet } from '../services/OutletService'
+import { searchOutlets, saveOutlet, deleteOutlet, updateOutletsFromSalesCsv } from '../services/OutletService'
 import { searchMr } from '../services/PanelService'
 
 const $q = useQuasar()
@@ -98,6 +99,7 @@ const rows = ref([])
 const loading = ref(false)
 const showDialog = ref(false)
 const saving = ref(false)
+const loadingUpdate = ref(false)
 const isEdit = ref(false)
 
 // MR Search State
@@ -180,6 +182,19 @@ async function loadData(props) {
 
 function onRequest(props) {
     loadData(props)
+}
+
+async function handleUpdateFromSalesCsv() {
+    loadingUpdate.value = true
+    try {
+        const count = await updateOutletsFromSalesCsv()
+        $q.notify({ type: 'positive', message: `Updated ${count} outlets from sales CSV` })
+        loadData()
+    } catch (e) {
+        $q.notify({ type: 'negative', message: 'Update failed: ' + e.message })
+    } finally {
+        loadingUpdate.value = false
+    }
 }
 
 function openDialog(row = null) {
