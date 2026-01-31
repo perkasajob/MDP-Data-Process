@@ -696,7 +696,7 @@ export async function sendTelegramReport(startDate, endDate) {
     // Adjust column names if schema differs (e.g. sales_person_id vs pejid)
     // We try 'pejid' based on consistency with other tables.
     const [targets] = await connection.execute(
-        'SELECT pejid, sales_target FROM sales.pejabat_divisi_lama WHERE tahun = ? AND bulan = ? AND sales_target IS NOT NULL',
+        'SELECT pejid, target as sales_target FROM sales.pj_sales_target WHERE tahun = ? AND bulan = ? AND target IS NOT NULL',
         [year, month]
     );
 
@@ -763,7 +763,7 @@ export async function sendTelegramReport(startDate, endDate) {
 
     // Get Global Target (Sum of jabid=4 and is_active=1)
     const [globalTargetRow] = await connection.execute(
-        'SELECT SUM(sales_target) as total FROM sales.pejabat_divisi_lama WHERE tahun = ? AND bulan = ? AND jabid = 4 AND is_active = 1',
+        'SELECT SUM(t.target) as total FROM sales.pejabat_divisi_lama p JOIN sales.pj_sales_target t ON p.pejid = t.pejid AND p.tahun = t.tahun AND p.bulan = t.bulan WHERE p.tahun = ? AND p.bulan = ? AND p.jabid = 4 AND p.is_active = 1',
         [year, month]
     );
     const globalTargetVal = Number(globalTargetRow[0]?.total || 0);
@@ -812,7 +812,7 @@ export async function sendTelegramReport(startDate, endDate) {
             updateVal = dailyTarget + (kekurangan);
         }
 
-        const fmt = (n) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0, notation: "compact", compactDisplay: "short", }).format(n);
+        const fmt = (n) => new Intl.NumberFormat('id-ID', { maximumFractionDigits: 2, notation: "compact", compactDisplay: "short", }).format(n);
         const escapeHtml = (text) => String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
         let message =

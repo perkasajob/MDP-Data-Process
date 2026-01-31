@@ -9,12 +9,55 @@ const xlsx = window.require('xlsx');
 
 dayjs.extend(customParseFormat);
 
+async function ensureTableSetup(connection) {
+    try {
+        // First, ensure the table exists (though it likely does if user sees duplicates)
+        await connection.execute(`
+            CREATE TABLE IF NOT EXISTS pj_sales_target (
+                pejid INT NOT NULL,
+                tahun INT NOT NULL,
+                bulan INT NOT NULL,
+                target DOUBLE DEFAULT 0,
+                PRIMARY KEY (pejid, tahun, bulan)
+            )
+        `);
+
+        // If it already existed but without PK/Unique, try to add it.
+        // We catch errors because it might already have the index or fail due to duplicates.
+        try {
+            await connection.execute(`
+                ALTER TABLE pj_sales_target ADD UNIQUE INDEX unq_pej_target (pejid, tahun, bulan)
+            `);
+        } catch (e) {
+            // Index might already exist or table has duplicates preventing index creation
+            if (e.message.indexOf('Duplicate entry') !== -1) {
+                logger.warn('Duplicate entries found in pj_sales_target. Attempting cleanup...');
+                // Cleanup: keep the one with the highest target? or just any one.
+                // Standard MySQL trick to delete duplicates:
+                await connection.execute(`
+                    CREATE TABLE pj_sales_target_temp AS 
+                    SELECT pejid, tahun, bulan, MAX(target) as target 
+                    FROM pj_sales_target 
+                    GROUP BY pejid, tahun, bulan
+                `);
+                await connection.execute('DROP TABLE pj_sales_target');
+                await connection.execute('RENAME TABLE pj_sales_target_temp TO pj_sales_target');
+                await connection.execute('ALTER TABLE pj_sales_target ADD PRIMARY KEY (pejid, tahun, bulan)');
+            }
+        }
+    } catch (error) {
+        logger.error('Error ensuring pj_sales_target table setup:', error);
+    }
+}
+
 export async function updateSalesTargets(filePath, dateStr) {
     if (!filePath || !fs.existsSync(filePath)) {
         throw new Error("File path is invalid or file does not exist.");
     }
 
     const connection = getDbConnection();
+    // await ensureTableSetup(connection);
+
     const workbook = xlsx.readFile(filePath);
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
@@ -27,114 +70,138 @@ export async function updateSalesTargets(filePath, dateStr) {
     const tahun = dateObj.year();
     const bulan = dateObj.month() + 1; // dayjs month is 0-indexed
 
+    // Define months for target, target1, target2
+    const targetMonths = [
+        dateObj,
+        dateObj.add(1, 'month'),
+        dateObj.add(2, 'month')
+    ];
+
     // Convert to JSON with array of arrays to handle indices easily
     // range: 5 means start from row 6 (0-indexed 5)
+    // Looking at the original code, it seems the headers are at Row 6 (range: 5)
     const rows = xlsx.utils.sheet_to_json(sheet, { header: 1, range: 5 });
 
     logger.info(`Processing sales targets from ${filePath} for ${tahun}-${bulan}. Found ${rows.length} rows.`);
 
-    let updatedCount = 0;
+    // Pre-load PEJIDs from name to handle rows without PEJID
+    const [pejabatRows] = await connection.execute(
+        'SELECT pejid, nama_pejabat FROM pejabat_divisi_lama WHERE tahun = ? AND bulan = ?',
+        [tahun, bulan]
+    );
+    const nameToIdMap = {};
+    pejabatRows.forEach(p => {
+        const cleanName = p.nama_pejabat.replace(/\s/g, "").toLowerCase();
+        nameToIdMap[cleanName] = p.pejid;
+    });
 
-
+    // Use a map to deduplicate Step 1 entries: pejid|year|month -> target
+    const targetMap = new Map();
 
     for (const row of rows) {
-        // row is an array of values. 
-        // Col A=0, B=1, C=2, D=3, E=4, F=5, G=6
-        // row is 0-indexed based on the range we selected. 
-        // If range=19 (row 20), then row[0] is Column A of row 20.
-        // We want Column D (index 3), F (5), G (6), H (7)
-        const key = row[3]; // Column D
+        // Col D (index 3) = Key (Name)
+        // Col E (index 4) = PEJID (usually for DM/SM)
+        // Col F (index 5) = Target (M)
+        // Col G (index 6) = Target 1 (M+1)
+        // Col H (index 7) = Target 2 (M+2)
 
-        if (!key) continue; // Skip if key is empty        
+        const name = row[3];
+        if (!name) continue;
 
-        const target = getNum(row[5]);  // Column F
-        const target1 = getNum(row[6]); // Column G
-        const target2 = getNum(row[7]); // Column H
-
-        // Update Query
-        // Using LIKE %key% for nama_pejabat
-        // We match any record where nama_pejabat contains the key name
-        const sql = `
-            UPDATE pejabat_divisi_lama 
-            SET sales_target = ?, sales_target1 = ?, sales_target2 = ? 
-            WHERE tahun = ? AND bulan = ? AND nama_pejabat LIKE ?
-        `;
-
-        const [result] = await connection.execute(sql, [
-            target, target1, target2,
-            tahun, bulan, `%${key.replace(/\s/g, "")}%`
-        ]);
-
-        if (result.affectedRows > 0) {
-            updatedCount += result.affectedRows;
+        let pejid = getNum(row[4]);
+        // If pejid is 0 (or large number like target mistakenly put in E), try lookup by name
+        if (!pejid || pejid === 0 || pejid > 100000) {
+            const cleanKey = String(name).replace(/\s/g, "").toLowerCase();
+            pejid = nameToIdMap[cleanKey];
         }
-    }
 
-    logger.info(`Updated sales targets. Total affected rows: ${updatedCount}`);
-
-    // Perform hierarchy calculation (DM/SM sum of MRs)
-    await processSalesTargets(connection, tahun, bulan);
-
-    // Update DM/SM targets specifically if provided in the file (overrides calculated sums)
-    // Optimization: Pass existing rows to avoid re-reading the file
-    await updateDMSMSalesTargets(rows, tahun, bulan);
-
-    return updatedCount;
-}
-
-/**
- * Updates DM/SM sales targets from existing rows where Column E contains pejid.
- * This overrides any calculated values from processSalesTargets.
- */
-export async function updateDMSMSalesTargets(rows, tahun, bulan) {
-    if (!rows || rows.length === 0) {
-        return 0;
-    }
-
-    const connection = getDbConnection();
-    let updatedCount = 0;
-
-    for (const row of rows) {
-        if (!row || row.length < 5) continue;
-
-        // Column E (index 4) contains pejid
-        const pejid = getNum(row[4]);
-
-        // Heuristic: If pejid is too large, it's likely a sales target from an MR row
-        // MRs don't have PEJID in Column E (they have Target there)
-        if (!pejid || pejid === 0 || pejid > 100000) continue;
-
-        // Column F (5) = target, G (6) = target1, H (7) = target2
-        const target = getNum(row[5]);
-        const target1 = getNum(row[6]);
-        const target2 = getNum(row[7]);
-
-        // Skip rows that don't look like target rows (all zeroes)
-        if (target === 0 && target1 === 0 && target2 === 0) continue;
-
-        const sql = `
-            UPDATE pejabat_divisi_lama 
-            SET sales_target = ?, sales_target1 = ?, sales_target2 = ? 
-            WHERE tahun = ? AND bulan = ? AND pejid = ?
-        `;
-
-        try {
-            const [result] = await connection.execute(sql, [
-                target, target1, target2,
-                tahun, bulan, pejid
-            ]);
-
-            if (result.affectedRows > 0) {
-                updatedCount += result.affectedRows;
+        if (!pejid) {
+            // Last resort: try LIKE matching if exact match failed
+            const [match] = await connection.execute(
+                'SELECT pejid FROM pejabat_divisi_lama WHERE tahun = ? AND bulan = ? AND nama_pejabat LIKE ? LIMIT 1',
+                [tahun, bulan, `%${String(name).trim()}%`]
+            );
+            if (match.length > 0) {
+                pejid = match[0].pejid;
             }
-        } catch (error) {
-            logger.error(`Error updating DMSM target for PEJID ${pejid}:`, error);
+        }
+
+        if (!pejid) {
+            logger.warn(`Could not find PEJID for official: ${name}`);
+            continue;
+        }
+
+        // Add 3 months of targets to the map
+        for (let i = 0; i < 3; i++) {
+            const val = getNum(row[5 + i]);
+            const d = targetMonths[i];
+            const key = `${pejid}|${d.year()}|${d.month() + 1}`;
+            targetMap.set(key, val);
         }
     }
 
-    logger.info(`Updated DM/SM sales targets from provided data. Total affected rows: ${updatedCount}`);
-    return updatedCount;
+    if (targetMap.size > 0) {
+        const updatedRows = Array.from(targetMap.entries()).map(([key, target]) => {
+            const [pId, yr, mo] = key.split('|').map(Number);
+            return [pId, yr, mo, target];
+        });
+
+        const sql = `
+            INSERT INTO pj_sales_target (pejid, tahun, bulan, target)
+            VALUES ?
+            ON DUPLICATE KEY UPDATE target = VALUES(target)
+        `;
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < updatedRows.length; i += CHUNK_SIZE) {
+            await connection.query(sql, [updatedRows.slice(i, i + CHUNK_SIZE)]);
+        }
+    }
+
+    logger.info(`Updated pj_sales_target. Total unique entries from Step 1: ${targetMap.size}`);
+
+    // Step 2: Perform hierarchy calculation for each of the 3 months
+    // This sums up MR targets into DM/SM targets
+    for (const d of targetMonths) {
+        await processSalesTargets(connection, d.year(), d.month() + 1);
+    }
+
+    // Step 3: Explicitly update DM/SM sales targets from file where PEJID is provided in Col E
+    // This overrides the calculated sums if specific targets were provided in the Excel for DM/SM
+    const dmsmMap = new Map();
+    for (const row of rows) {
+        const pejid = getNum(row[4]); // Column E
+        // Only consider it a manual DM/SM override if pejid is valid and small
+        if (pejid > 0 && pejid < 100000) {
+            for (let i = 0; i < 3; i++) {
+                const val = getNum(row[5 + i]); // F, G, H
+                const d = targetMonths[i];
+                const key = `${pejid}|${d.year()}|${d.month() + 1}`;
+                dmsmMap.set(key, val);
+            }
+        }
+    }
+
+    if (dmsmMap.size > 0) {
+        const dmsmRows = Array.from(dmsmMap.entries()).map(([key, target]) => {
+            const [pId, yr, mo] = key.split('|').map(Number);
+            return [pId, yr, mo, target];
+        });
+
+        const sql = `
+            INSERT INTO pj_sales_target (pejid, tahun, bulan, target)
+            VALUES ?
+            ON DUPLICATE KEY UPDATE target = VALUES(target)
+        `;
+        const CHUNK_SIZE = 500;
+        for (let i = 0; i < dmsmRows.length; i += CHUNK_SIZE) {
+            await connection.query(sql, [dmsmRows.slice(i, i + CHUNK_SIZE)]);
+        }
+        logger.info(`Applied DM/SM overrides from file for ${dmsmMap.size / 3} officials.`);
+    }
+
+    return (targetMap.size / 3) + (dmsmMap.size / 3);
 }
+
 
 
 async function processSalesTargets(connection, year, month) {
@@ -143,21 +210,20 @@ async function processSalesTargets(connection, year, month) {
         return;
     }
 
-    console.log(`\n--- Starting Calculation for ${year}-${month} ---`);
+    logger.info(`Recalculating hierarchy targets for ${year}-${month}...`);
 
     try {
-        // 1. Fetch Data for this specific period
-        // We get every employee active in this period and their manager (if any)
-        console.log("1. Fetching data...");
-
+        // 1. Fetch Data
+        // We need the hierarchy from old_maker_cheker and targets from pj_sales_target
+        // We also join pejabat_divisi_lama to ensure we only process existing/active officials
         const [rows] = await connection.execute(`
             SELECT 
                 p.pejid, 
-                p.sales_target, 
-                p.sales_target1, 
-                p.sales_target2,
+                COALESCE(t.target, 0) as target,
                 mc.cheker AS manager_id
             FROM pejabat_divisi_lama p
+            LEFT JOIN pj_sales_target t
+                ON p.pejid = t.pejid AND p.tahun = t.tahun AND p.bulan = t.bulan
             LEFT JOIN old_maker_cheker mc 
                 ON p.pejid = mc.maker 
                 AND p.tahun = mc.thn 
@@ -166,29 +232,19 @@ async function processSalesTargets(connection, year, month) {
         `, [year, month]);
 
         if (rows.length === 0) {
-            console.log("   No data found for this period.");
             return;
         }
-        console.log(`   Fetched ${rows.length} employees.`);
 
-        // 2. Build In-Memory Graph
-        // Since we filtered by Year/Month, ID is unique enough for the key
         const employees = new Map();
         const hierarchy = new Map(); // manager_id -> [child_ids]
 
         rows.forEach(row => {
-            // Create employee object
-            const empData = {
+            employees.set(row.pejid, {
                 id: row.pejid,
-                // Ensure values are numbers for calculation
-                t1: parseFloat(row.sales_target) || 0,
-                t2: parseFloat(row.sales_target1) || 0,
-                t3: parseFloat(row.sales_target2) || 0,
-                isManager: false // Flag to track if we need to update this person
-            };
-            employees.set(row.pejid, empData);
+                target: parseFloat(row.target) || 0,
+                isManager: false
+            });
 
-            // Build hierarchy links
             if (row.manager_id) {
                 if (!hierarchy.has(row.manager_id)) {
                     hierarchy.set(row.manager_id, []);
@@ -197,92 +253,59 @@ async function processSalesTargets(connection, year, month) {
             }
         });
 
-        // 3. Recursive Calculation (Post-Order Traversal)
         const visited = new Set();
         const updates = [];
 
         function getRecursiveTotals(empId) {
             if (visited.has(empId)) {
-                // Return cached values if already processed
-                // (Handles duplicate links safely, though hierarchy should be a tree)
-                return employees.get(empId) || { t1: 0, t2: 0, t3: 0 };
+                return employees.get(empId) || { target: 0 };
             }
 
             const emp = employees.get(empId);
-
-            // Safety: If manager exists in hierarchy but not in 'pejabat' table
-            if (!emp) return { t1: 0, t2: 0, t3: 0 };
+            if (!emp) return { target: 0 };
 
             const childrenIds = hierarchy.get(empId);
 
-            // --- BASE CASE: LEAF NODE (The Bottom) ---
-            // If no children, return the manually entered target
+            // BASE CASE: LEAF NODE
             if (!childrenIds || childrenIds.length === 0) {
                 visited.add(empId);
-                return { t1: emp.t1, t2: emp.t2, t3: emp.t3 };
+                return { target: emp.target };
             }
 
-            // --- RECURSIVE STEP: MANAGER ---
-            let sumT1 = 0, sumT2 = 0, sumT3 = 0;
-
+            // RECURSIVE STEP: MANAGER
+            let sumTarget = 0;
             for (const childId of childrenIds) {
                 const childTotals = getRecursiveTotals(childId);
-                sumT1 += childTotals.t1;
-                sumT2 += childTotals.t2;
-                sumT3 += childTotals.t3;
+                sumTarget += childTotals.target;
             }
 
             // Update the manager's totals with the sum of children
-            emp.t1 = sumT1;
-            emp.t2 = sumT2;
-            emp.t3 = sumT3;
-            emp.isManager = true; // Mark as modified so we save it later
-
-            updates.push(emp); // Add to save queue
+            emp.target = sumTarget;
+            emp.isManager = true;
+            updates.push(emp);
             visited.add(empId);
 
-            return { t1: sumT1, t2: sumT2, t3: sumT3 };
+            return { target: sumTarget };
         }
 
-        console.log("2. Calculating hierarchy sums...");
-
-        // Run recursion on every employee to ensure disconnected trees are processed
-        // (The visited set ensures we don't double-process)
         for (const [id] of employees) {
             getRecursiveTotals(id);
         }
 
-        // 4. Batch Update to MySQL
         if (updates.length > 0) {
-            console.log(`3. updating ${updates.length} managers...`);
-
-            // Process in chunks to respect MySQL packet limits
-            const CHUNK_SIZE = 2000;
-
-            for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
-                const chunk = updates.slice(i, i + CHUNK_SIZE);
-
-                // Map data to array of arrays: [pejid, tahun, bulan, t1, t2, t3]
-                const values = chunk.map(u => [u.id, year, month, u.t1, u.t2, u.t3]);
-
-                const sql = `
-                    INSERT INTO pejabat_divisi_lama 
-                        (pejid, tahun, bulan, sales_target, sales_target1, sales_target2) 
-                    VALUES ? 
-                    ON DUPLICATE KEY UPDATE 
-                        sales_target = VALUES(sales_target),
-                        sales_target1 = VALUES(sales_target1),
-                        sales_target2 = VALUES(sales_target2)
-                `;
-
-                await connection.query(sql, [values]);
-            }
-            console.log("   Success!");
-        } else {
-            console.log("   No hierarchy updates needed (everyone is a leaf node?).");
+            const values = updates.map(u => [u.id, year, month, u.target]);
+            const sql = `
+                INSERT INTO pj_sales_target (pejid, tahun, bulan, target) 
+                VALUES ? 
+                ON DUPLICATE KEY UPDATE target = VALUES(target)
+            `;
+            await connection.query(sql, [values]);
         }
 
     } catch (error) {
-        console.error("FATAL ERROR:", error);
+        logger.error(`Error in processSalesTargets for ${year}-${month}:`, error);
     }
 }
+
+
+
