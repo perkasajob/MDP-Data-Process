@@ -12,6 +12,20 @@
         />
         <q-btn color="info" label="Sync to Meilisearch" @click="handleSync" :loading="loadingSync" />
         <q-btn color="deep-orange" label="Sync from SalesDivisi2" @click="handleSyncFromHistory" :loading="loadingSyncHistory" />
+        <q-btn color="secondary" label="Download Unmapped" icon="download" @click="handleDownload" />
+        <q-file
+          v-model="uploadFile"
+          label="Upload Mapping"
+          dense filled
+          accept=".csv"
+          style="width: 200px"
+          @update:model-value="handleUpload"
+          :loading="loadingUpload"
+        >
+          <template v-slot:prepend>
+            <q-icon name="upload" />
+          </template>
+        </q-file>
         <q-btn color="positive" label="Save Changes" @click="handleSave" :loading="loadingSave" />
       </div>
     </div>
@@ -21,7 +35,7 @@
       :rows="unmappedData"
       :columns="unmappedColumns"
       row-key="kode_outlet"
-      selection="single"
+      selection="single"      
       v-model:selected="selectedUnmapped"
       @selection="handleSelection"
       :pagination="{ rowsPerPage: 10 }"
@@ -119,12 +133,19 @@
 
   </q-page>
 </template>
+<style scoped>
+.q-table :deep(td) {
+    font-size: 10px;
+}
+</style>
 
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
-import { getUnmappedOutlets, saveOutletMappings, searchMeilisearch, searchFuseJs, syncToMeilisearch, searchSql, syncFromSalesDivisi2 } from '../services/OutletService'
+import { getUnmappedOutlets, saveOutletMappings, searchMeilisearch, searchFuseJs, syncToMeilisearch, searchSql, syncFromSalesDivisi2, exportUnmappedOutletsToCsv, updateOutletsFromCsv } from '../services/OutletService'
 import { searchMr } from '../services/PanelService'
+import dayjs from 'dayjs'
+import { HOME_DIR } from '../const'
 
 const $q = useQuasar()
 const unmappedData = ref([])
@@ -137,7 +158,9 @@ const loadingSync = ref(false)
 const loadingSyncHistory = ref(false)
 const loadingSave = ref(false)
 const loadingSuggestions = ref(false)
+const loadingUpload = ref(false)
 
+const uploadFile = ref(null)
 const mrOptions = ref([])
 
 // SQL Search State
@@ -344,6 +367,51 @@ async function handleSyncFromHistory() {
     } finally {
         loadingSyncHistory.value = false
     }
+}
+
+async function handleDownload() {
+    try {
+        const path = window.require('path')
+        const { shell } = window.require('electron')
+        const reportDir = path.join(HOME_DIR, 'report')
+        const fs = window.require('fs')
+        if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true })
+
+        const filePath = path.join(reportDir, `unmapped_outlets_${dayjs().format('YYYYMMDD_HHmm')}.csv`)
+        await exportUnmappedOutletsToCsv(filePath)
+        
+        $q.notify({ type: 'positive', message: 'File saved to ' + filePath })
+        shell.openPath(filePath)
+    } catch (e) {
+        $q.notify({ type: 'negative', message: 'Download Failed: ' + e.message })
+    }
+}
+
+async function handleUpload() {
+  if (!uploadFile.value) return
+  
+  loadingUpload.value = true
+  try {
+      let filePath = null
+      try {
+          const { webUtils } = window.require('electron')
+          filePath = webUtils.getPathForFile(uploadFile.value)
+      } catch (e) {
+          filePath = uploadFile.value.path
+      }
+      
+      if (!filePath) throw new Error('Could not get file path')
+
+      const count = await updateOutletsFromCsv(filePath)
+      $q.notify({ type: 'positive', message: `Successfully updated ${count} outlets` })
+      uploadFile.value = null
+      await loadData()
+  } catch (e) {
+      console.error(e)
+      $q.notify({ type: 'negative', message: 'Upload Failed: ' + e.message })
+  } finally {
+      loadingUpload.value = false
+  }
 }
 
 function sanitizeAddress(address) {

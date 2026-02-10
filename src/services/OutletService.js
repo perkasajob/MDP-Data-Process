@@ -173,7 +173,7 @@ export async function syncToMeilisearch() {
         SELECT p.*, m.MR as mr_name
         FROM pj_outlets p
         LEFT JOIN pj_mkt_structure m ON p.mrid = m.MRID
-        WHERE p.outid IS NOT NULL AND p.outid != ""
+        WHERE p.outid IS NOT NULL AND p.outid != "" AND p.kode_outlet != ""
     `);
 
     if (rows.length === 0) throw new Error('No valid outlets found');
@@ -290,6 +290,36 @@ export async function updateOutletsFromCsv(filePath) {
     }
     return updatedCount;
 }
+
+export async function exportUnmappedOutletsToCsv(filePath) {
+    const fs = window.require('fs');
+    const { stringify } = window.require('csv-stringify/sync');
+    const connection = getDbConnection();
+    const [rows] = await connection.execute(`
+        SELECT p.*, m.MR as mr_name
+        FROM pj_outlets p
+        LEFT JOIN pj_mkt_structure m ON p.mrid = m.MRID
+        WHERE p.outid IS NULL OR p.outid = "" AND p.kode_outlet != ""
+    `);
+
+    const data = rows.map(o => ({
+        'Outlet Code': o.kode_outlet,
+        'Outlet Name': o.outlet,
+        'Address': o.alamat,
+        'City': o.kota,
+        'Distributor': o.distributor,
+        'comid': o.comid || '',
+        'Outid': o.outid || '',
+        'MRID': o.mrid || ''
+    }));
+
+    const csvContent = stringify(data, {
+        header: true
+    });
+
+    fs.writeFileSync(filePath, csvContent);
+}
+
 
 export async function searchOutlets(filters, limit = 50, offset = 0) {
     const connection = getDbConnection();

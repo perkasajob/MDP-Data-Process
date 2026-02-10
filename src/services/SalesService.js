@@ -761,12 +761,13 @@ export async function sendTelegramReport(startDate, endDate) {
     let sentCount = 0;
     let skippedCount = 0;
 
-    // Get Global Target (Sum of jabid=4 and is_active=1)
+    // Get Global Target (Sum of jabid=14 (GSM) and is_active=1)
     const [globalTargetRow] = await connection.execute(
-        'SELECT SUM(t.target) as total FROM sales.pejabat_divisi_lama p JOIN sales.pj_sales_target t ON p.pejid = t.pejid AND p.tahun = t.tahun AND p.bulan = t.bulan WHERE p.tahun = ? AND p.bulan = ? AND p.jabid = 4 AND p.is_active = 1',
+        'SELECT SUM(t.target) as total FROM sales.pejabat_divisi_lama p JOIN sales.pj_sales_target t ON p.pejid = t.pejid AND p.tahun = t.tahun AND p.bulan = t.bulan WHERE p.tahun = ? AND p.bulan = ? AND p.jabid=14 AND t.pejid IS NOT NULL AND p.is_active = 1',
         [year, month]
     );
     const globalTargetVal = Number(globalTargetRow[0]?.total || 0);
+    console.log(globalTargetVal);
 
     // Build list of all messages to be sent
     const pendingMessages = [];
@@ -841,7 +842,7 @@ export async function sendTelegramReport(startDate, endDate) {
 
         try {
             // TODO: Uncomment this to enable Telegram sending pjob
-            // await sendTelegramMessage(token, chatid, message);
+            await sendTelegramMessage(token, chatid, message);
             console.log(pejid);
             console.log(message);
             sentCount++;
