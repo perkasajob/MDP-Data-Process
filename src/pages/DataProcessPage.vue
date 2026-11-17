@@ -109,7 +109,7 @@ import { HOME_DIR } from '../const'
 const $q = useQuasar()
 const distributor = ref('APL')
 const distributorOptions = ['APL', 'TSJ', 'PPG', 'ALL']
-const ecatFilter = ref('Non ECAT')
+const ecatFilter = ref('All')
 const salesFile = ref(null)
 
 const reportRange = ref('yesterday')

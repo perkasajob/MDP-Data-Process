@@ -134,8 +134,8 @@
   </q-page>
 </template>
 <style scoped>
-.q-table :deep(td) {
-    font-size: 10px;
+:deep(.q-table tbody td) {
+    font-size: 11px;
 }
 </style>
 

@@ -88,6 +88,12 @@
   </q-page>
 </template>
 
+<style scoped>
+:deep(.q-table tbody td) {
+    font-size: 11px;
+}
+</style>
+
 <script setup>
 import { ref, onMounted, reactive } from 'vue'
 import { useQuasar } from 'quasar'

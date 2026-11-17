@@ -119,7 +119,7 @@ export async function updateSalesTargets(filePath, dateStr) {
             // Last resort: try LIKE matching if exact match failed
             const [match] = await connection.execute(
                 'SELECT pejid FROM pejabat_divisi_lama WHERE tahun = ? AND bulan = ? AND nama_pejabat LIKE ? LIMIT 1',
-                [tahun, bulan, `%${String(name).trim()}%`]
+                [tahun, bulan, `%${String(name).replaceAll(' ', '')}%`]
             );
             if (match.length > 0) {
                 pejid = match[0].pejid;

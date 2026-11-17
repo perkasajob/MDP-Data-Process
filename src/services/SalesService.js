@@ -18,6 +18,11 @@ dayjs.extend(customParseFormat);
 
 const homeDir = HOME_DIR;
 
+function toNullable(val) {
+    if (val === '' || val === null || val === undefined) return null;
+    return val;
+}
+
 const REPORT_HEADERS = [
     'Tahun', 'Bulan', 'Comid', 'Disid', 'Distributor', 'Outid', 'Outlet', 'Alamat',
     'Tanggal Faktur', 'Nomor Faktur', 'PO Outlet', 'Proid', 'Product', 'Batch No',
@@ -275,7 +280,7 @@ async function processAPL(rows) {
         processedSales.add(saleKey);
 
         salesValues.push([
-            plant_code, disid, tanggal_faktur, nomor_faktur, item_code, quantity,
+            plant_code, toNullable(disid), tanggal_faktur, nomor_faktur, item_code, quantity,
             kode_outlet, value, net_value, po_outlet, batch_no, disc_distributor, ecat
         ]);
 
@@ -426,7 +431,7 @@ async function submitSalesReport(rows) {
             const disid = disidMatch ? disidMatch[0] : row.disid;
 
             data.push([
-                row.comid,
+                toNullable(row.comid),
                 slhids[row.comid],
                 row.tahun,
                 row.bulan,
@@ -434,9 +439,9 @@ async function submitSalesReport(rows) {
                 row.nomor_faktur,
                 row.quantity,
                 null, null, null, null, // thn_retur, bln_retur, qty_retur, realokasi
-                row.proid,
+                toNullable(row.proid),
                 disid,
-                row.outid,
+                toNullable(row.outid),
                 row.distributor,
                 row.outlet,
                 row.product,
@@ -489,12 +494,12 @@ async function updateSalesCache(connection, rows) {
 
     for (const r of rows) {
         await connection.query(updateSql, [
-            r.comid, r.outid, r.outlet, r.alamat,
-            r.proid, r.product, r.urut_prod, r.hnr,
+            toNullable(r.comid), toNullable(r.outid), r.outlet, r.alamat,
+            toNullable(r.proid), r.product, toNullable(r.urut_prod), r.hnr,
             r.disc_amt, r.disc_p, r.disc_berno, r.hnr2, r.nama_grup,
-            r.TPID, r.TP, r.SPVID, r.SPV, r.DMID, r.DM,
-            r.AMID, r.AM, r.SMID, r.SM, r.GSMID, r.GSM,
-            r.off_mr, r.off_spv, r.off_dm, r.off_am, r.SP_SALES, r.DPLID,
+            toNullable(r.TPID), r.TP, toNullable(r.SPVID), r.SPV, toNullable(r.DMID), r.DM,
+            toNullable(r.AMID), r.AM, toNullable(r.SMID), r.SM, toNullable(r.GSMID), r.GSM,
+            r.off_mr, r.off_spv, r.off_dm, r.off_am, r.SP_SALES, toNullable(r.DPLID),
             r.distributor, r.nomor_faktur, r.item_code
         ]);
     }
@@ -706,14 +711,18 @@ export async function sendTelegramReport(startDate, endDate) {
 
     // 2. Get Contacts
     const [contacts] = await connection.execute(
-        'SELECT pejid, chatid, `all` FROM sales.pj_sales_person'
+        'SELECT pejid, chatid, note, `all` FROM sales.pj_sales_person'
     );
     const targetContactMap = {}; // pejid -> chatid
     const allReportContacts = []; // list of {chatid, pejid?}
+    const note = {};
 
     contacts.forEach(c => {
         if (!c.chatid) return;
-        if (c.pejid) targetContactMap[c.pejid] = c.chatid;
+        if (c.pejid) {
+            targetContactMap[c.pejid] = c.chatid;
+            note[c.pejid] = c.note;
+        }
         if (c.all) allReportContacts.push({ chatid: c.chatid, pejid: c.pejid });
     });
 
@@ -843,7 +852,7 @@ export async function sendTelegramReport(startDate, endDate) {
         try {
             // TODO: Uncomment this to enable Telegram sending pjob
             await sendTelegramMessage(token, chatid, message);
-            console.log(pejid);
+            console.log(note[pejid], ', pejid:', pejid);
             console.log(message);
             sentCount++;
             // Throttle: pause 1s between messages

@@ -11,7 +11,7 @@ export async function getUnmappedOutlets() {
         SELECT p.*, m.MR as mr_name
         FROM pj_outlets p
         LEFT JOIN pj_mkt_structure m ON p.mrid = m.MRID
-        WHERE p.outid IS NULL OR p.outid = ""
+        WHERE p.outid IS NULL OR p.outid = "" or p.outid=0 or p.mrid=0 or p.comid IS NULL
     `);
     return rows;
 }
